@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 
 # ==============================================================================
@@ -22,7 +21,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.0.1"
 readonly OPENSHIP_INSTALL_URL="https://get.openship.io"
 
 readonly LOG_FILE="/var/log/openship-control-install.log"
@@ -645,27 +644,34 @@ configure_ssh() {
 
     local config="/etc/ssh/sshd_config.d/99-openship-control.conf"
 
-    cat > "$config" <<EOF
-# OpenShip Control Plane
-
-Port ${SSH_PORT_INPUT}
-
-PubkeyAuthentication yes
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-
-X11Forwarding no
-AllowAgentForwarding no
-EOF
+    {
+        echo "# OpenShip Control Plane"
+        echo
+        echo "Port ${SSH_PORT_INPUT}"
+        echo
+        echo "PubkeyAuthentication yes"
+        echo "KbdInteractiveAuthentication no"
+        echo
+        echo "X11Forwarding no"
+        echo "AllowAgentForwarding no"
+    } > "$config"
 
     if [[ -f "/home/${ADMIN_USER_INPUT}/.ssh/authorized_keys" ]]; then
         cat >> "$config" <<'EOF'
 
+PasswordAuthentication no
 PermitRootLogin prohibit-password
 EOF
+        success "SSH password authentication disabled."
     else
-        warn "Administrator SSH key was not detected."
-        warn "Root login configuration was not changed."
+        cat >> "$config" <<'EOF'
+
+# Password authentication remains enabled because no administrator SSH key
+# was found during installation.
+EOF
+        warn "No administrator SSH key was detected."
+        warn "Password authentication remains enabled to prevent lockout."
+        warn "Add an SSH key to the administrator account, then disable passwords manually."
     fi
 
     sshd -t
@@ -852,14 +858,13 @@ install_openship_cli() {
 
     curl -fsSL "$OPENSHIP_INSTALL_URL" | sh
 
-    export PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
+    # The official installer installs the CLI under ~/.openship/bin.
+    export PATH="/root/.openship/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
 
-    if ! command_exists openship; then
-        if [[ -x "/root/.local/bin/openship" ]]; then
-            ln -sf \
-                "/root/.local/bin/openship" \
-                "/usr/local/bin/openship"
-        fi
+    if ! command_exists openship && [[ -x "/root/.openship/bin/openship" ]]; then
+        ln -sf \
+            "/root/.openship/bin/openship" \
+            "/usr/local/bin/openship"
     fi
 
     command_exists openship ||
@@ -940,17 +945,10 @@ run_openship_setup() {
 
     read -r -p "Press ENTER to start OpenShip..."
 
-    if [[ "$INSTALL_MODE" == "bare" ]]; then
-
-        # Official OpenShip Bare mode.
-        openship up --bare
-
-    else
-
-        # Official Docker mode.
-        openship
-
-    fi
+    # Always use the guided wizard so OpenShip creates the admin account
+    # and prints the login URL. Bare vs. Compose is determined by whether
+    # Docker was installed on this control-plane host.
+    openship
 }
 
 # ------------------------------------------------------------------------------
@@ -1107,4 +1105,3 @@ main() {
 }
 
 main "$@"
-```
