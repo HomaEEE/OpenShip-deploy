@@ -855,6 +855,61 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# Runtime mode enforcement
+# ------------------------------------------------------------------------------
+
+prepare_runtime_for_openship() {
+    section "OpenShip runtime"
+
+    if [[ "$INSTALL_MODE" != "bare" ]]; then
+        log "Standard mode selected. Docker is available for OpenShip Compose."
+        return
+    fi
+
+    # OpenShip's guided wizard automatically selects Compose on Linux when
+    # Docker + Compose are available. For a true Bare installation Docker
+    # must not be present, otherwise the wizard will silently choose Compose.
+    if ! command_exists docker; then
+        success "Bare mode: Docker is not installed."
+        return
+    fi
+
+    warn "Docker is already installed on this VPS."
+    warn "OpenShip's guided wizard detects Docker and will select Compose mode."
+    warn "To enforce Bare mode, Docker packages must be removed before setup."
+    echo
+
+    if ! ask_yes_no "Remove Docker packages now and continue with Bare mode?" "Y"; then
+        die "Bare mode cannot be guaranteed while Docker is installed."
+    fi
+
+    systemctl stop docker docker.socket containerd 2>/dev/null || true
+    systemctl disable docker docker.socket containerd 2>/dev/null || true
+
+    apt-get remove -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin \
+        docker-ce-rootless-extras 2>/dev/null || true
+
+    # Remove Docker's apt source/key installed by this installer. Do not delete
+    # /var/lib/docker automatically: existing Docker data should never be
+    # destroyed implicitly.
+    rm -f /etc/apt/sources.list.d/docker.list
+    rm -f /etc/apt/keyrings/docker.asc
+
+    hash -r 2>/dev/null || true
+
+    if command_exists docker; then
+        die "Docker is still available after removal. Refusing to continue Bare setup."
+    fi
+
+    success "Docker removed. OpenShip will now use Bare mode."
+}
+
+# ------------------------------------------------------------------------------
 # OpenShip CLI
 # ------------------------------------------------------------------------------
 
@@ -1107,6 +1162,8 @@ main() {
 
     install_docker
     configure_docker
+
+    prepare_runtime_for_openship
 
     install_openship_cli
     preflight_openship
