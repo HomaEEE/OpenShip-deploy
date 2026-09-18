@@ -448,7 +448,7 @@ collect_configuration() {
         warn "Invalid SSH port."
     done
 
-    ADMIN_USER_INPUT="$(ask_default "Linux administrator" "deploy")"
+    ADMIN_USER_INPUT="$(ask_default "Linux administrator" "openship")"
 
     if ! [[ "$ADMIN_USER_INPUT" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
         die "Invalid Linux username: ${ADMIN_USER_INPUT}"
