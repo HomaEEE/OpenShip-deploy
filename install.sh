@@ -21,7 +21,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="2.1.1"
+readonly SCRIPT_VERSION="2.1.2"
 readonly OPENSHIP_INSTALL_URL="https://get.openship.io"
 
 readonly LOG_FILE="/var/log/openship-control-install.log"
@@ -860,7 +860,7 @@ EOF
 
 # ------------------------------------------------------------------------------
 # Runtime mode enforcement
-// ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 
 prepare_runtime_for_openship() {
     section "OpenShip runtime"
