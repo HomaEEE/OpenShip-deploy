@@ -21,7 +21,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_VERSION="2.1.1"
 readonly OPENSHIP_INSTALL_URL="https://get.openship.io"
 
 readonly LOG_FILE="/var/log/openship-control-install.log"
@@ -490,6 +490,10 @@ ADMIN_USER=${ADMIN_USER_INPUT}
 ENABLE_UFW=${ENABLE_UFW}
 ENABLE_FAIL2BAN=${ENABLE_FAIL2BAN}
 ENABLE_SWAP=${ENABLE_SWAP}
+OPENSHIP_ADMIN_NAME=${OPENSHIP_ADMIN_NAME_INPUT:-}
+OPENSHIP_ADMIN_EMAIL=${OPENSHIP_ADMIN_EMAIL_INPUT:-}
+OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-}
+OPENSHIP_HOST=${OPENSHIP_HOST:-}
 EOF
 
     chmod 600 "$STATE_FILE"
@@ -855,7 +859,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-// Runtime mode enforcement
+# Runtime mode enforcement
 // ------------------------------------------------------------------------------
 
 prepare_runtime_for_openship() {
