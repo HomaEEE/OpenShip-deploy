@@ -21,7 +21,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="2.0.1"
+readonly SCRIPT_VERSION="2.1.0"
 readonly OPENSHIP_INSTALL_URL="https://get.openship.io"
 
 readonly LOG_FILE="/var/log/openship-control-install.log"
@@ -855,58 +855,27 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# Runtime mode enforcement
-# ------------------------------------------------------------------------------
+// Runtime mode enforcement
+// ------------------------------------------------------------------------------
 
 prepare_runtime_for_openship() {
     section "OpenShip runtime"
 
-    if [[ "$INSTALL_MODE" != "bare" ]]; then
-        log "Standard mode selected. Docker is available for OpenShip Compose."
+    if [[ "$INSTALL_MODE" == "bare" ]]; then
+        # OpenShip has an explicit --bare mode. It forces the lightweight
+        # process service even if Docker exists on the host.
+        if command_exists docker; then
+            warn "Docker is installed on the host, but OpenShip will NOT use it."
+        fi
+
+        success "Bare runtime selected: OpenShip will be started with --bare."
         return
     fi
 
-    # OpenShip's guided wizard automatically selects Compose on Linux when
-    # Docker + Compose are available. For a true Bare installation Docker
-    # must not be present, otherwise the wizard will silently choose Compose.
-    if ! command_exists docker; then
-        success "Bare mode: Docker is not installed."
-        return
-    fi
+    command_exists docker ||
+        die "Standard mode requires Docker."
 
-    warn "Docker is already installed on this VPS."
-    warn "OpenShip's guided wizard detects Docker and will select Compose mode."
-    warn "To enforce Bare mode, Docker packages must be removed before setup."
-    echo
-
-    if ! ask_yes_no "Remove Docker packages now and continue with Bare mode?" "Y"; then
-        die "Bare mode cannot be guaranteed while Docker is installed."
-    fi
-
-    systemctl stop docker docker.socket containerd 2>/dev/null || true
-    systemctl disable docker docker.socket containerd 2>/dev/null || true
-
-    apt-get remove -y \
-        docker-ce \
-        docker-ce-cli \
-        containerd.io \
-        docker-buildx-plugin \
-        docker-compose-plugin \
-        docker-ce-rootless-extras 2>/dev/null || true
-
-    # Remove Docker's apt source/key installed by this installer. Do not delete
-    # /var/lib/docker automatically: existing Docker data should never be
-    # destroyed implicitly.
-    rm -f /etc/apt/sources.list.d/docker.list
-    rm -f /etc/apt/keyrings/docker.asc
-
-    hash -r 2>/dev/null || true
-
-    if command_exists docker; then
-        die "Docker is still available after removal. Refusing to continue Bare setup."
-    fi
-
-    success "Docker removed. OpenShip will now use Bare mode."
+    success "Standard runtime selected: OpenShip will use Docker Compose."
 }
 
 # ------------------------------------------------------------------------------
@@ -983,6 +952,133 @@ preflight_openship() {
 # OpenShip setup
 # ------------------------------------------------------------------------------
 
+collect_bare_openship_credentials() {
+    section "OpenShip Bare configuration"
+
+    echo "Bare mode uses the supported headless OpenShip flow:"
+    echo "  openship up --bare --non-interactive"
+    echo
+    echo "The server will use OpenShip\x27s embedded database and will not"
+    echo "create the OpenShip Docker/Compose stack."
+    echo
+
+    OPENSHIP_ADMIN_NAME_INPUT="$(ask_default "OpenShip administrator name" "$ADMIN_USER_INPUT")"
+
+    while true; do
+        OPENSHIP_ADMIN_EMAIL_INPUT="$(ask_default "OpenShip administrator email" "")"
+        if [[ "$OPENSHIP_ADMIN_EMAIL_INPUT" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+            break
+        fi
+        warn "Enter a valid email address."
+    done
+
+    while true; do
+        read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
+        echo
+        read -r -s -p "Repeat OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_CONFIRM </dev/tty
+        echo
+
+        if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
+            warn "Password cannot be empty."
+            continue
+        fi
+
+        if (( ${#OPENSHIP_ADMIN_PASSWORD_INPUT} < 8 )); then
+            warn "Password must contain at least 8 characters."
+            continue
+        fi
+
+        if [[ "$OPENSHIP_ADMIN_PASSWORD_INPUT" != "$OPENSHIP_ADMIN_PASSWORD_CONFIRM" ]]; then
+            warn "Passwords do not match."
+            continue
+        fi
+
+        break
+    done
+
+    unset OPENSHIP_ADMIN_PASSWORD_CONFIRM
+
+    OPENSHIP_DOMAIN_KIND="none"
+    OPENSHIP_PUBLIC_URL=""
+    OPENSHIP_HOST=""
+
+    echo
+    echo "OpenShip instance reachability:"
+    echo
+    echo "  1) This machine only"
+    echo "     Dashboard stays local to the VPS. A Cloudflare Tunnel or reverse proxy"
+    echo "     can expose it later without changing the Bare runtime."
+    echo
+    echo "  2) Custom domain"
+    echo "     Configure a public hostname during the Bare installation."
+    echo
+    echo "  3) Cancel"
+    echo
+
+    while true; do
+        read -r -p "Select [1]: " reachability </dev/tty
+        reachability="${reachability:-1}"
+        case "$reachability" in
+            1)
+                OPENSHIP_DOMAIN_KIND="none"
+                break
+                ;;
+            2)
+                OPENSHIP_DOMAIN_KIND="custom"
+                while true; do
+                    OPENSHIP_HOST="$(ask_default "OpenShip domain" "")"
+                    if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+                        break
+                    fi
+                    warn "Enter a valid DNS hostname, for example ops.example.com."
+                done
+                OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+                break
+                ;;
+            3)
+                die "Installation cancelled."
+                ;;
+            *)
+                echo "Invalid choice."
+                ;;
+        esac
+    done
+
+    echo
+    success "Bare OpenShip configuration collected."
+}
+
+run_bare_openship_setup() {
+    collect_bare_openship_credentials
+
+    echo
+    echo "Starting OpenShip Bare service..."
+    echo
+
+    export OPENSHIP_ADMIN_PASSWORD="$OPENSHIP_ADMIN_PASSWORD_INPUT"
+
+    local -a args
+    args=(
+        up
+        --bare
+        --non-interactive
+        --admin-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
+        --admin-name "$OPENSHIP_ADMIN_NAME_INPUT"
+        --domain-kind "$OPENSHIP_DOMAIN_KIND"
+    )
+
+    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
+        args+=(--hostname "$OPENSHIP_HOST" --public-url "$OPENSHIP_PUBLIC_URL")
+    fi
+
+    openship "${args[@]}"
+
+    unset OPENSHIP_ADMIN_PASSWORD
+    unset OPENSHIP_ADMIN_PASSWORD_INPUT
+
+    success "OpenShip Bare service started and admin account created."
+}
+
 run_openship_setup() {
     section "OpenShip first-run setup"
 
@@ -991,13 +1087,14 @@ run_openship_setup() {
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        echo "OpenShip will be started in Bare mode."
+        echo "OpenShip will use the explicit --bare runtime mode."
+        echo "The Docker-detecting guided wizard will NOT be used."
         echo
-        echo "No Docker containers will be created by this installer."
-    else
-        echo "OpenShip will be started using Docker."
+        run_bare_openship_setup
+        return
     fi
 
+    echo "OpenShip will be started using Docker Compose."
     echo
     echo "The official OpenShip setup will ask for:"
     echo
@@ -1011,23 +1108,17 @@ run_openship_setup() {
     echo -e "${YELLOW}Do not close this terminal during setup.${NC}"
     echo
 
-    read -r -p "Press ENTER to start OpenShip..."
+    read -r -p "Press ENTER to start OpenShip..." </dev/tty
 
-    # The installer logs normal output through tee. OpenShip's interactive
-    # TUI needs a real terminal for stdin/stdout/stderr; otherwise its
-    # selection screen can become invisible or fail to redraw correctly.
-    if [[ ! -e /dev/tty ]]; then
+    [[ -e /dev/tty ]] ||
         die "Interactive terminal /dev/tty is not available for OpenShip setup."
-    fi
 
     echo
     log "Starting OpenShip interactive setup with direct TTY I/O..."
     echo
 
-    # Keep the installer logging intact, but give OpenShip the real terminal.
     openship </dev/tty >/dev/tty 2>/dev/tty
 }
-
 # ------------------------------------------------------------------------------
 # Post-install
 # ------------------------------------------------------------------------------
