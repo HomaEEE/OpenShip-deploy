@@ -26,6 +26,9 @@ chmod 600 "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 FAILED=0
+INSTALL_MODE=""
+SSH_PORT=""
+ADMIN_USER=""
 
 echo
 echo "============================================================"
