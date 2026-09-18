@@ -28,7 +28,10 @@ readonly LOG_FILE="/var/log/openship-control-install.log"
 readonly STATE_DIR="/etc/openship-control"
 readonly STATE_FILE="${STATE_DIR}/install.conf"
 
-readonly MIN_RAM_MB=1024
+# Resource thresholds
+# Bare mode is intentionally allowed on small VPS instances.
+# 768 MiB is the hard minimum; 2 GiB is recommended for Standard/Docker.
+readonly MIN_RAM_MB=768
 readonly RECOMMENDED_RAM_MB=2048
 readonly MIN_DISK_GB=10
 
@@ -241,12 +244,20 @@ check_resources() {
     detect_resources
 
     echo "RAM:     ${RAM_MB} MB"
+    echo "Minimum: ${MIN_RAM_MB} MB (Bare)"
+    echo "Recommended: ${RECOMMENDED_RAM_MB} MB (Standard)"
     echo "CPU:     ${CPU_COUNT}"
     echo "Disk:    ${DISK_GB} GB"
     echo
 
     if (( RAM_MB < MIN_RAM_MB )); then
-        die "At least 1 GB RAM is required."
+        die "At least 768 MiB RAM is required for Bare mode."
+    elif (( RAM_MB < RECOMMENDED_RAM_MB )); then
+        warn "Low-memory VPS detected: ${RAM_MB} MB RAM."
+        warn "Bare mode is recommended for this server."
+        warn "Standard/Docker mode may be unstable or use swap heavily."
+    else
+        success "RAM is sufficient for Standard mode."
     fi
 
     if (( DISK_GB < MIN_DISK_GB )); then
@@ -295,6 +306,8 @@ select_installation_mode() {
         echo "On a 1 GB VPS this can create significant memory pressure."
         echo
         echo "For 1–2 GB VPS servers, Bare mode is recommended."
+        echo
+        echo "Hard minimum for Bare mode: 768 MiB RAM."
         echo -e "${NC}"
 
         echo
