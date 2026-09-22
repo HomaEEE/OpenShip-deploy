@@ -13,8 +13,6 @@ services:
       - "${MARIADB_PORT:-3306}:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
-    networks:
-      - openship-network
     healthcheck:
       test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized || mariadb-admin ping -h 127.0.0.1 -u root -p\"$$MARIADB_ROOT_PASSWORD\" || exit 1"]
       interval: 10s
@@ -42,8 +40,6 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
-    networks:
-      - openship-network
     healthcheck:
       test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
       interval: 10s
@@ -56,7 +52,3 @@ volumes:
     name: openship_mariadb_data
   redis_data:
     name: openship_redis_data
-
-networks:
-  openship-network:
-    name: openship-network
