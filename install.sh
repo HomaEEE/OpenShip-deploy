@@ -160,6 +160,149 @@ ask_default() {
     echo "${value:-$default}"
 }
 
+prompt_select() {
+    local target_var="$1"
+    local prompt_text="$2"
+    local default_idx="${3:-0}"
+    shift 3
+    local options=("$@")
+    local count=${#options[@]}
+    local cur=$default_idx
+    local key=""
+
+    local tty_in="/dev/tty"
+    local tty_out="/dev/tty"
+
+    # Non-interactive / piped fallback
+    if [[ ! -r "$tty_in" || ! -w "$tty_out" ]] 2>/dev/null; then
+        echo -e "${BOLD}${CYAN}? ${prompt_text}${NC}"
+        local i=0
+        for opt in "${options[@]}"; do
+            local title="${opt%%|*}"
+            local desc="${opt#*|}"
+            [[ "$desc" == "$opt" ]] && desc=""
+            if [[ -n "$desc" ]]; then
+                echo -e "  $((i+1))) \033[1m$title\033[0m — $desc"
+            else
+                echo -e "  $((i+1))) \033[1m$title\033[0m"
+            fi
+            i=$((i + 1))
+        done
+        local val=""
+        read -r -p "Select [$((default_idx + 1))]: " val
+        val="${val:-$((default_idx + 1))}"
+        if [[ "$val" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= count )); then
+            eval "$target_var=\$((val - 1))"
+        else
+            eval "$target_var=\$default_idx"
+        fi
+        return 0
+    fi
+
+    # Interactive TUI mode
+    tput civis >"$tty_out" 2>/dev/null || true
+    local old_int_trap
+    old_int_trap=$(trap -p INT)
+    trap 'tput cnorm >/dev/tty 2>/dev/null || true; exit 130' INT
+
+    local rendered_lines=0
+
+    while true; do
+        if (( rendered_lines > 0 )); then
+            printf "\033[%dA" "$rendered_lines" >"$tty_out"
+        fi
+
+        rendered_lines=0
+
+        # Header
+        printf "\033[2K\033[1;36m◆\033[0m \033[1m%s\033[0m\n" "$prompt_text" >"$tty_out"
+        rendered_lines=$((rendered_lines + 1))
+
+        # Options
+        local i=0
+        for opt in "${options[@]}"; do
+            local title="${opt%%|*}"
+            local desc="${opt#*|}"
+            [[ "$desc" == "$opt" ]] && desc=""
+
+            if [[ "$i" -eq "$cur" ]]; then
+                printf "\033[2K  \033[1;36m● %d) %s\033[0m\n" "$((i+1))" "$title" >"$tty_out"
+                rendered_lines=$((rendered_lines + 1))
+                if [[ -n "$desc" ]]; then
+                    printf "\033[2K     \033[36m%s\033[0m\n" "$desc" >"$tty_out"
+                    rendered_lines=$((rendered_lines + 1))
+                fi
+            else
+                printf "\033[2K  \033[2m○ %d) %s\033[0m\n" "$((i+1))" "$title" >"$tty_out"
+                rendered_lines=$((rendered_lines + 1))
+                if [[ -n "$desc" ]]; then
+                    printf "\033[2K     \033[2m%s\033[0m\n" "$desc" >"$tty_out"
+                    rendered_lines=$((rendered_lines + 1))
+                fi
+            fi
+            i=$((i + 1))
+        done
+
+        # Footer
+        printf "\033[2K  \033[2m(↑/↓ to navigate, Enter to select, 1-%d shortcuts)\033[0m\n" "$count" >"$tty_out"
+        rendered_lines=$((rendered_lines + 1))
+
+        # Read single key
+        IFS= read -rsn1 key <"$tty_in"
+        if [[ "$key" == $'\x1b' ]]; then
+            read -rsn2 key <"$tty_in"
+            case "$key" in
+                "["A|"OA")
+                    if (( cur > 0 )); then
+                        cur=$((cur - 1))
+                    else
+                        cur=$((count - 1))
+                    fi
+                    ;;
+                "["B|"OB")
+                    if (( cur < count - 1 )); then
+                        cur=$((cur + 1))
+                    else
+                        cur=0
+                    fi
+                    ;;
+            esac
+        elif [[ "$key" == "k" ]]; then
+            if (( cur > 0 )); then cur=$((cur - 1)); else cur=$((count - 1)); fi
+        elif [[ "$key" == "j" ]]; then
+            if (( cur < count - 1 )); then cur=$((cur + 1)); else cur=0; fi
+        elif [[ "$key" =~ ^[1-9]$ ]]; then
+            local num=$((key - 1))
+            if (( num >= 0 && num < count )); then
+                cur=$num
+                break
+            fi
+        elif [[ -z "$key" ]]; then
+            break
+        fi
+    done
+
+    # Clean up menu rendering and print single final selection line
+    if (( rendered_lines > 0 )); then
+        printf "\033[%dA" "$rendered_lines" >"$tty_out"
+        printf "\033[0J" >"$tty_out"
+    fi
+    tput cnorm >"$tty_out" 2>/dev/null || true
+    if [[ -n "$old_int_trap" ]]; then
+        eval "$old_int_trap"
+    else
+        trap - INT
+    fi
+
+    local selected_opt="${options[$cur]}"
+    local selected_title="${selected_opt%%|*}"
+    printf "\033[1;32m✔\033[0m \033[1m%s\033[0m \033[36m%s\033[0m\n" "$prompt_text" "$selected_title" >"$tty_out"
+    log "Selected: $selected_title"
+
+    eval "$target_var=\$cur"
+    return 0
+}
+
 valid_hostname() {
     [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]
 }
@@ -310,30 +453,19 @@ select_installation_mode() {
         echo "Hard minimum for Bare mode: 768 MiB RAM."
         echo -e "${NC}"
 
-        echo
-        echo "Choose installation mode:"
-        echo
-        echo "  1) Bare"
-        echo "     OpenShip without Docker."
-        echo "     Recommended for this server."
-        echo
-        echo "  2) Standard"
-        echo "     OpenShip using Docker."
-        echo "     Requires more RAM."
-        echo
-        echo "  3) Cancel"
-        echo
-
         while true; do
-            read -r -p "Select [1]: " choice
-            choice="${choice:-1}"
+            local choice_idx=0
+            prompt_select choice_idx "Choose installation mode:" 0 \
+                "Bare|OpenShip without Docker. Recommended for this server." \
+                "Standard|OpenShip using Docker. Requires more RAM." \
+                "Cancel|Abort installation."
 
-            case "$choice" in
-                1)
+            case "$choice_idx" in
+                0)
                     INSTALL_MODE="bare"
                     break
                     ;;
-                2)
+                1)
                     echo
                     warn "You selected Standard Docker mode on a low-memory VPS."
                     warn "The system may use swap heavily or become unstable."
@@ -344,50 +476,31 @@ select_installation_mode() {
                         break
                     fi
                     ;;
-                3)
+                2)
                     die "Installation cancelled."
-                    ;;
-                *)
-                    echo "Invalid choice."
                     ;;
             esac
         done
 
     else
 
-        echo "Choose installation mode:"
-        echo
-        echo "  1) Standard"
-        echo "     OpenShip using Docker."
-        echo "     Recommended."
-        echo
-        echo "  2) Bare"
-        echo "     OpenShip without Docker."
-        echo
-        echo "  3) Cancel"
-        echo
+        local choice_idx=0
+        prompt_select choice_idx "Choose installation mode:" 0 \
+            "Standard|OpenShip using Docker. Recommended." \
+            "Bare|OpenShip without Docker." \
+            "Cancel|Abort installation."
 
-        while true; do
-            read -r -p "Select [1]: " choice
-            choice="${choice:-1}"
-
-            case "$choice" in
-                1)
-                    INSTALL_MODE="standard"
-                    break
-                    ;;
-                2)
-                    INSTALL_MODE="bare"
-                    break
-                    ;;
-                3)
-                    die "Installation cancelled."
-                    ;;
-                *)
-                    echo "Invalid choice."
-                    ;;
-            esac
-        done
+        case "$choice_idx" in
+            0)
+                INSTALL_MODE="standard"
+                ;;
+            1)
+                INSTALL_MODE="bare"
+                ;;
+            2)
+                die "Installation cancelled."
+                ;;
+        esac
 
     fi
 
@@ -969,43 +1082,36 @@ collect_bare_openship_credentials() {
     echo "For a private/local instance, choose Local. GitHub App registration"
     echo "will not be available until OPENSHIP_PUBLIC_URL is configured later."
     echo
-    echo "OpenShip reachability:"
-    echo
-    echo "  1) Local / private"
-    echo "     Keep the dashboard private on this VPS."
-    echo
-    echo "  2) Public HTTPS domain"
-    echo "     Configure OPENSHIP_PUBLIC_URL for GitHub App callbacks/webhooks."
-    echo
-    echo "  3) Cancel"
-    echo
-    while true; do
-        read -r -p "Select [2]: " reachability </dev/tty
-        reachability="\${reachability:-2}"
-        case "$reachability" in
-            1)
-                OPENSHIP_DOMAIN_KIND="none"
-                OPENSHIP_PUBLIC_URL=""
-                OPENSHIP_HOST=""
-                break ;;
-            2)
-                OPENSHIP_DOMAIN_KIND="custom"
-                while true; do
-                    OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
-                    if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
-                        break
-                    fi
-                    warn "Enter a valid DNS hostname, for example openship.example.com."
-                done
-                OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
-                break ;;
-            3) die "Installation cancelled." ;;
-            *) echo "Invalid choice." ;;
-        esac
-    done
+    local reachability_idx=1
+    prompt_select reachability_idx "OpenShip reachability:" 1 \
+        "Local / private|Keep the dashboard private on this VPS." \
+        "Public HTTPS domain|Configure OPENSHIP_PUBLIC_URL for GitHub App callbacks/webhooks." \
+        "Cancel|Abort installation."
+
+    case "$reachability_idx" in
+        0)
+            OPENSHIP_DOMAIN_KIND="none"
+            OPENSHIP_PUBLIC_URL=""
+            OPENSHIP_HOST=""
+            ;;
+        1)
+            OPENSHIP_DOMAIN_KIND="custom"
+            while true; do
+                OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
+                if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+                    break
+                fi
+                warn "Enter a valid DNS hostname, for example openship.example.com."
+            done
+            OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+            ;;
+        2)
+            die "Installation cancelled."
+            ;;
+    esac
     echo
     if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        success "OpenShip public URL: \${OPENSHIP_PUBLIC_URL}"
+        success "OpenShip public URL: ${OPENSHIP_PUBLIC_URL}"
         echo
         warn "Make sure DNS and HTTPS routing for this hostname point to this VPS"
         warn "before creating the GitHub App."
