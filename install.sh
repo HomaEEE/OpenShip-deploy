@@ -649,9 +649,11 @@ install_base_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
-    apt-get update
+    dpkg --configure -a 2>/dev/null || true
 
-    apt-get install -y \
+    apt-get update -o DPkg::Lock::Timeout=120
+
+    apt-get install -y -o DPkg::Lock::Timeout=120 \
         ca-certificates \
         curl \
         gnupg \
@@ -672,7 +674,7 @@ install_base_packages() {
         fail2ban \
         unattended-upgrades
 
-    apt-get autoremove -y
+    apt-get autoremove -y -o DPkg::Lock::Timeout=120
 
     success "Base packages installed."
 }
@@ -919,9 +921,11 @@ install_docker() {
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-${VERSION_CODENAME}} stable
 EOF
 
-    apt-get update
+    dpkg --configure -a 2>/dev/null || true
 
-    apt-get install -y \
+    apt-get update -o DPkg::Lock::Timeout=120
+
+    apt-get install -y -o DPkg::Lock::Timeout=120 \
         docker-ce \
         docker-ce-cli \
         containerd.io \
