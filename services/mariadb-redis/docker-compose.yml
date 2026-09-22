@@ -9,8 +9,6 @@ services:
       - --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-256M}
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
-    ports:
-      - "${MARIADB_PORT:-3306}:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
     healthcheck:
@@ -36,8 +34,6 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-256mb}
       REDIS_MAXMEMORY_POLICY: ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
