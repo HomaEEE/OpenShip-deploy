@@ -1035,14 +1035,22 @@ run_bare_openship_setup() {
     [[ -e /dev/tty ]] ||
         die "Interactive terminal /dev/tty is not available for OpenShip setup."
 
-    # Keep the official guided wizard interactive. On a low-memory Bare host,
-    # Docker is intentionally absent, so the wizard selects the lightweight runtime.
-    openship </dev/tty >/dev/tty 2>/dev/tty
+    local up_args=("--bare")
+    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" && -n "${OPENSHIP_PUBLIC_URL:-}" ]]; then
+        up_args+=("--public-url" "$OPENSHIP_PUBLIC_URL")
+    fi
+
+    # Explicitly start OpenShip as a lightweight systemd process service (no Docker).
+    openship up "${up_args[@]}" </dev/tty >/dev/tty 2>/dev/tty
+
+    echo
+    log "Configuring OpenShip administrator account..."
+    openship reset-admin-password </dev/tty >/dev/tty 2>/dev/tty || true
 
     unset OPENSHIP_PUBLIC_URL
     unset OPENSHIP_HOST
 
-    success "OpenShip interactive setup completed."
+    success "OpenShip Bare setup completed."
 }
 
 run_openship_setup() {
