@@ -981,7 +981,7 @@ collect_bare_openship_credentials() {
     echo
     while true; do
         read -r -p "Select [2]: " reachability </dev/tty
-        reachability="\${reachability:-2}"
+        reachability="${reachability:-2}"
         case "$reachability" in
             1)
                 OPENSHIP_DOMAIN_KIND="none"
@@ -1005,7 +1005,7 @@ collect_bare_openship_credentials() {
     done
     echo
     if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        success "OpenShip public URL: \${OPENSHIP_PUBLIC_URL}"
+        success "OpenShip public URL: ${OPENSHIP_PUBLIC_URL}"
         echo
         warn "Make sure DNS and HTTPS routing for this hostname point to this VPS"
         warn "before creating the GitHub App."
