@@ -218,9 +218,26 @@ prompt_select() {
         printf "\033[2K\033[1;36m◆\033[0m \033[1m%s\033[0m\n" "$prompt_text" >"$tty_out"
         rendered_lines=$((rendered_lines + 1))
 
-        # Options
-        local i=0
-        for opt in "${options[@]}"; do
+        # Options (with scrollable window for long lists)
+        local page_size=8
+        local window_start=0
+        if (( count > page_size )); then
+            if (( cur >= page_size )); then
+                window_start=$((cur - page_size + 1))
+            fi
+        fi
+        local window_end=$((window_start + page_size))
+        if (( window_end > count )); then
+            window_end=$count
+        fi
+
+        if (( window_start > 0 )); then
+            printf "\033[2K  \033[2m▲ (%d more above)\033[0m\n" "$window_start" >"$tty_out"
+            rendered_lines=$((rendered_lines + 1))
+        fi
+
+        for (( i=window_start; i<window_end; i++ )); do
+            local opt="${options[$i]}"
             local title="${opt%%|*}"
             local desc="${opt#*|}"
             [[ "$desc" == "$opt" ]] && desc=""
@@ -240,8 +257,12 @@ prompt_select() {
                     rendered_lines=$((rendered_lines + 1))
                 fi
             fi
-            i=$((i + 1))
         done
+
+        if (( window_end < count )); then
+            printf "\033[2K  \033[2m▼ (%d more below)\033[0m\n" "$((count - window_end))" >"$tty_out"
+            rendered_lines=$((rendered_lines + 1))
+        fi
 
         # Footer
         printf "\033[2K  \033[2m(↑/↓ to navigate, Enter to select, 1-%d shortcuts)\033[0m\n" "$count" >"$tty_out"
@@ -519,6 +540,95 @@ select_installation_mode() {
 # Configuration
 # ------------------------------------------------------------------------------
 
+select_timezone() {
+    local detected_tz=""
+    detected_tz="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "UTC")"
+    [[ "$detected_tz" == "Europe/Kiev" ]] && detected_tz="Europe/Kyiv"
+
+    local tz_mode_idx=0
+    prompt_select tz_mode_idx "Timezone selection:" 0 \
+        "Current system timezone (${detected_tz})|Keep existing system timezone." \
+        "Select by Region / City|Browse system timezones from /usr/share/zoneinfo." \
+        "UTC|Coordinated Universal Time (recommended for servers)." \
+        "Enter manually|Type custom timezone name."
+
+    case "$tz_mode_idx" in
+        0)
+            TIMEZONE_INPUT="$detected_tz"
+            ;;
+        1)
+            # 1. Choose Region
+            local regions=()
+            for r in Europe America Asia Africa Atlantic Australia Indian Pacific UTC; do
+                if [[ "$r" == "UTC" || -d "/usr/share/zoneinfo/$r" ]]; then
+                    regions+=("$r")
+                fi
+            done
+
+            local region_opts=()
+            for r in "${regions[@]}"; do
+                region_opts+=("$r|Timezones in $r")
+            done
+
+            local def_reg_idx=0
+            for i in "${!regions[@]}"; do
+                if [[ "${regions[$i]}" == "Europe" ]]; then
+                    def_reg_idx=$i
+                    break
+                fi
+            done
+
+            local reg_idx=0
+            prompt_select reg_idx "Select Region:" "$def_reg_idx" "${region_opts[@]}"
+            local selected_region="${regions[$reg_idx]}"
+
+            if [[ "$selected_region" == "UTC" ]]; then
+                TIMEZONE_INPUT="UTC"
+            else
+                # 2. Choose City in Region
+                local cities=()
+                while IFS= read -r c; do
+                    [[ -n "$c" ]] && cities+=("$c")
+                done < <(find "/usr/share/zoneinfo/$selected_region" -maxdepth 1 -type f -o -type l | sed "s#/usr/share/zoneinfo/$selected_region/##" | grep -v '^\.' | sort)
+
+                local city_opts=()
+                for c in "${cities[@]}"; do
+                    city_opts+=("$c|$selected_region/$c")
+                done
+
+                local def_city_idx=0
+                local current_city="${detected_tz#*/}"
+                for i in "${!cities[@]}"; do
+                    if [[ "${cities[$i]}" == "$current_city" || "${cities[$i]}" == "Kyiv" ]]; then
+                        def_city_idx=$i
+                        break
+                    fi
+                done
+
+                local city_idx=0
+                prompt_select city_idx "Select City ($selected_region):" "$def_city_idx" "${city_opts[@]}"
+                local selected_city="${cities[$city_idx]}"
+                TIMEZONE_INPUT="$selected_region/$selected_city"
+            fi
+            ;;
+        2)
+            TIMEZONE_INPUT="UTC"
+            ;;
+        3)
+            while true; do
+                TIMEZONE_INPUT="$(ask_default "Timezone" "UTC")"
+                if [[ "$TIMEZONE_INPUT" == "Europe/Kyiv" && ! -f "/usr/share/zoneinfo/Europe/Kyiv" && -f "/usr/share/zoneinfo/Europe/Kiev" ]]; then
+                    TIMEZONE_INPUT="Europe/Kiev"
+                fi
+                if [[ -f "/usr/share/zoneinfo/$TIMEZONE_INPUT" ]] || timedatectl list-timezones 2>/dev/null | grep -Fxqi "$TIMEZONE_INPUT"; then
+                    break
+                fi
+                warn "Timezone '$TIMEZONE_INPUT' not found in system."
+            done
+            ;;
+    esac
+}
+
 collect_configuration() {
     section "Control Plane configuration"
 
@@ -540,16 +650,7 @@ collect_configuration() {
         warn "Invalid hostname."
     done
 
-    TIMEZONE_INPUT="$(ask_default "Timezone" "UTC")"
-
-    if ! timedatectl list-timezones 2>/dev/null |
-        grep -Fxq "$TIMEZONE_INPUT"; then
-
-        warn "Timezone '${TIMEZONE_INPUT}' not found."
-        warn "Using UTC."
-
-        TIMEZONE_INPUT="UTC"
-    fi
+    select_timezone
 
     while true; do
         SSH_PORT_INPUT="$(ask_default "SSH port" "22")"
@@ -640,7 +741,12 @@ configure_hostname() {
 configure_timezone() {
     section "Timezone"
 
-    timedatectl set-timezone "$TIMEZONE_INPUT"
+    if ! timedatectl set-timezone "$TIMEZONE_INPUT" 2>/dev/null; then
+        if [[ -f "/usr/share/zoneinfo/$TIMEZONE_INPUT" ]]; then
+            ln -sf "/usr/share/zoneinfo/$TIMEZONE_INPUT" /etc/localtime
+            echo "$TIMEZONE_INPUT" > /etc/timezone
+        fi
+    fi
 
     success "Timezone: ${TIMEZONE_INPUT}"
 }
