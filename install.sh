@@ -160,170 +160,6 @@ ask_default() {
     echo "${value:-$default}"
 }
 
-prompt_select() {
-    local target_var="$1"
-    local prompt_text="$2"
-    local default_idx="${3:-0}"
-    shift 3
-    local options=("$@")
-    local count=${#options[@]}
-    local cur=$default_idx
-    local key=""
-
-    local tty_in="/dev/tty"
-    local tty_out="/dev/tty"
-
-    # Non-interactive / piped fallback
-    if [[ ! -r "$tty_in" || ! -w "$tty_out" ]] 2>/dev/null; then
-        echo -e "${BOLD}${CYAN}? ${prompt_text}${NC}"
-        local i=0
-        for opt in "${options[@]}"; do
-            local title="${opt%%|*}"
-            local desc="${opt#*|}"
-            [[ "$desc" == "$opt" ]] && desc=""
-            if [[ -n "$desc" ]]; then
-                echo -e "  $((i+1))) \033[1m$title\033[0m — $desc"
-            else
-                echo -e "  $((i+1))) \033[1m$title\033[0m"
-            fi
-            i=$((i + 1))
-        done
-        local val=""
-        read -r -p "Select [$((default_idx + 1))]: " val
-        val="${val:-$((default_idx + 1))}"
-        if [[ "$val" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= count )); then
-            eval "$target_var=\$((val - 1))"
-        else
-            eval "$target_var=\$default_idx"
-        fi
-        return 0
-    fi
-
-    # Interactive TUI mode
-    tput civis >"$tty_out" 2>/dev/null || true
-    local old_int_trap
-    old_int_trap=$(trap -p INT)
-    trap 'tput cnorm >/dev/tty 2>/dev/null || true; exit 130' INT
-
-    local rendered_lines=0
-
-    while true; do
-        if (( rendered_lines > 0 )); then
-            printf "\033[%dA" "$rendered_lines" >"$tty_out"
-        fi
-
-        rendered_lines=0
-
-        # Header
-        printf "\033[2K\033[1;36m◆\033[0m \033[1m%s\033[0m\n" "$prompt_text" >"$tty_out"
-        rendered_lines=$((rendered_lines + 1))
-
-        # Options (with scrollable window for long lists)
-        local page_size=8
-        local window_start=0
-        if (( count > page_size )); then
-            if (( cur >= page_size )); then
-                window_start=$((cur - page_size + 1))
-            fi
-        fi
-        local window_end=$((window_start + page_size))
-        if (( window_end > count )); then
-            window_end=$count
-        fi
-
-        if (( window_start > 0 )); then
-            printf "\033[2K  \033[2m▲ (%d more above)\033[0m\n" "$window_start" >"$tty_out"
-            rendered_lines=$((rendered_lines + 1))
-        fi
-
-        for (( i=window_start; i<window_end; i++ )); do
-            local opt="${options[$i]}"
-            local title="${opt%%|*}"
-            local desc="${opt#*|}"
-            [[ "$desc" == "$opt" ]] && desc=""
-
-            if [[ "$i" -eq "$cur" ]]; then
-                printf "\033[2K  \033[1;36m● %d) %s\033[0m\n" "$((i+1))" "$title" >"$tty_out"
-                rendered_lines=$((rendered_lines + 1))
-                if [[ -n "$desc" ]]; then
-                    printf "\033[2K     \033[36m%s\033[0m\n" "$desc" >"$tty_out"
-                    rendered_lines=$((rendered_lines + 1))
-                fi
-            else
-                printf "\033[2K  \033[2m○ %d) %s\033[0m\n" "$((i+1))" "$title" >"$tty_out"
-                rendered_lines=$((rendered_lines + 1))
-                if [[ -n "$desc" ]]; then
-                    printf "\033[2K     \033[2m%s\033[0m\n" "$desc" >"$tty_out"
-                    rendered_lines=$((rendered_lines + 1))
-                fi
-            fi
-        done
-
-        if (( window_end < count )); then
-            printf "\033[2K  \033[2m▼ (%d more below)\033[0m\n" "$((count - window_end))" >"$tty_out"
-            rendered_lines=$((rendered_lines + 1))
-        fi
-
-        # Footer
-        printf "\033[2K  \033[2m(↑/↓ to navigate, Enter to select, 1-%d shortcuts)\033[0m\n" "$count" >"$tty_out"
-        rendered_lines=$((rendered_lines + 1))
-
-        # Read single key
-        IFS= read -rsn1 key <"$tty_in"
-        if [[ "$key" == $'\x1b' ]]; then
-            read -rsn2 key <"$tty_in"
-            case "$key" in
-                "["A|"OA")
-                    if (( cur > 0 )); then
-                        cur=$((cur - 1))
-                    else
-                        cur=$((count - 1))
-                    fi
-                    ;;
-                "["B|"OB")
-                    if (( cur < count - 1 )); then
-                        cur=$((cur + 1))
-                    else
-                        cur=0
-                    fi
-                    ;;
-            esac
-        elif [[ "$key" == "k" ]]; then
-            if (( cur > 0 )); then cur=$((cur - 1)); else cur=$((count - 1)); fi
-        elif [[ "$key" == "j" ]]; then
-            if (( cur < count - 1 )); then cur=$((cur + 1)); else cur=0; fi
-        elif [[ "$key" =~ ^[1-9]$ ]]; then
-            local num=$((key - 1))
-            if (( num >= 0 && num < count )); then
-                cur=$num
-                break
-            fi
-        elif [[ -z "$key" ]]; then
-            break
-        fi
-    done
-
-    # Clean up menu rendering and print single final selection line
-    if (( rendered_lines > 0 )); then
-        printf "\033[%dA" "$rendered_lines" >"$tty_out"
-        printf "\033[0J" >"$tty_out"
-    fi
-    tput cnorm >"$tty_out" 2>/dev/null || true
-    if [[ -n "$old_int_trap" ]]; then
-        eval "$old_int_trap"
-    else
-        trap - INT
-    fi
-
-    local selected_opt="${options[$cur]}"
-    local selected_title="${selected_opt%%|*}"
-    printf "\033[1;32m✔\033[0m \033[1m%s\033[0m \033[36m%s\033[0m\n" "$prompt_text" "$selected_title" >"$tty_out"
-    log "Selected: $selected_title"
-
-    eval "$target_var=\$cur"
-    return 0
-}
-
 valid_hostname() {
     [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]
 }
@@ -474,19 +310,30 @@ select_installation_mode() {
         echo "Hard minimum for Bare mode: 768 MiB RAM."
         echo -e "${NC}"
 
-        while true; do
-            local choice_idx=0
-            prompt_select choice_idx "Choose installation mode:" 0 \
-                "Bare|OpenShip without Docker. Recommended for this server." \
-                "Standard|OpenShip using Docker. Requires more RAM." \
-                "Cancel|Abort installation."
+        echo
+        echo "Choose installation mode:"
+        echo
+        echo "  1) Bare"
+        echo "     OpenShip without Docker."
+        echo "     Recommended for this server."
+        echo
+        echo "  2) Standard"
+        echo "     OpenShip using Docker."
+        echo "     Requires more RAM."
+        echo
+        echo "  3) Cancel"
+        echo
 
-            case "$choice_idx" in
-                0)
+        while true; do
+            read -r -p "Select [1]: " choice
+            choice="${choice:-1}"
+
+            case "$choice" in
+                1)
                     INSTALL_MODE="bare"
                     break
                     ;;
-                1)
+                2)
                     echo
                     warn "You selected Standard Docker mode on a low-memory VPS."
                     warn "The system may use swap heavily or become unstable."
@@ -497,31 +344,50 @@ select_installation_mode() {
                         break
                     fi
                     ;;
-                2)
+                3)
                     die "Installation cancelled."
+                    ;;
+                *)
+                    echo "Invalid choice."
                     ;;
             esac
         done
 
     else
 
-        local choice_idx=0
-        prompt_select choice_idx "Choose installation mode:" 0 \
-            "Standard|OpenShip using Docker. Recommended." \
-            "Bare|OpenShip without Docker." \
-            "Cancel|Abort installation."
+        echo "Choose installation mode:"
+        echo
+        echo "  1) Standard"
+        echo "     OpenShip using Docker."
+        echo "     Recommended."
+        echo
+        echo "  2) Bare"
+        echo "     OpenShip without Docker."
+        echo
+        echo "  3) Cancel"
+        echo
 
-        case "$choice_idx" in
-            0)
-                INSTALL_MODE="standard"
-                ;;
-            1)
-                INSTALL_MODE="bare"
-                ;;
-            2)
-                die "Installation cancelled."
-                ;;
-        esac
+        while true; do
+            read -r -p "Select [1]: " choice
+            choice="${choice:-1}"
+
+            case "$choice" in
+                1)
+                    INSTALL_MODE="standard"
+                    break
+                    ;;
+                2)
+                    INSTALL_MODE="bare"
+                    break
+                    ;;
+                3)
+                    die "Installation cancelled."
+                    ;;
+                *)
+                    echo "Invalid choice."
+                    ;;
+            esac
+        done
 
     fi
 
@@ -539,95 +405,6 @@ select_installation_mode() {
 # ------------------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------------------
-
-select_timezone() {
-    local detected_tz=""
-    detected_tz="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "UTC")"
-    [[ "$detected_tz" == "Europe/Kiev" ]] && detected_tz="Europe/Kyiv"
-
-    local tz_mode_idx=0
-    prompt_select tz_mode_idx "Timezone selection:" 0 \
-        "Current system timezone (${detected_tz})|Keep existing system timezone." \
-        "Select by Region / City|Browse system timezones from /usr/share/zoneinfo." \
-        "UTC|Coordinated Universal Time (recommended for servers)." \
-        "Enter manually|Type custom timezone name."
-
-    case "$tz_mode_idx" in
-        0)
-            TIMEZONE_INPUT="$detected_tz"
-            ;;
-        1)
-            # 1. Choose Region
-            local regions=()
-            for r in Europe America Asia Africa Atlantic Australia Indian Pacific UTC; do
-                if [[ "$r" == "UTC" || -d "/usr/share/zoneinfo/$r" ]]; then
-                    regions+=("$r")
-                fi
-            done
-
-            local region_opts=()
-            for r in "${regions[@]}"; do
-                region_opts+=("$r|Timezones in $r")
-            done
-
-            local def_reg_idx=0
-            for i in "${!regions[@]}"; do
-                if [[ "${regions[$i]}" == "Europe" ]]; then
-                    def_reg_idx=$i
-                    break
-                fi
-            done
-
-            local reg_idx=0
-            prompt_select reg_idx "Select Region:" "$def_reg_idx" "${region_opts[@]}"
-            local selected_region="${regions[$reg_idx]}"
-
-            if [[ "$selected_region" == "UTC" ]]; then
-                TIMEZONE_INPUT="UTC"
-            else
-                # 2. Choose City in Region
-                local cities=()
-                while IFS= read -r c; do
-                    [[ -n "$c" ]] && cities+=("$c")
-                done < <(find "/usr/share/zoneinfo/$selected_region" -maxdepth 1 -type f -o -type l | sed "s#/usr/share/zoneinfo/$selected_region/##" | grep -v '^\.' | sort)
-
-                local city_opts=()
-                for c in "${cities[@]}"; do
-                    city_opts+=("$c|$selected_region/$c")
-                done
-
-                local def_city_idx=0
-                local current_city="${detected_tz#*/}"
-                for i in "${!cities[@]}"; do
-                    if [[ "${cities[$i]}" == "$current_city" || "${cities[$i]}" == "Kyiv" ]]; then
-                        def_city_idx=$i
-                        break
-                    fi
-                done
-
-                local city_idx=0
-                prompt_select city_idx "Select City ($selected_region):" "$def_city_idx" "${city_opts[@]}"
-                local selected_city="${cities[$city_idx]}"
-                TIMEZONE_INPUT="$selected_region/$selected_city"
-            fi
-            ;;
-        2)
-            TIMEZONE_INPUT="UTC"
-            ;;
-        3)
-            while true; do
-                TIMEZONE_INPUT="$(ask_default "Timezone" "UTC")"
-                if [[ "$TIMEZONE_INPUT" == "Europe/Kyiv" && ! -f "/usr/share/zoneinfo/Europe/Kyiv" && -f "/usr/share/zoneinfo/Europe/Kiev" ]]; then
-                    TIMEZONE_INPUT="Europe/Kiev"
-                fi
-                if [[ -f "/usr/share/zoneinfo/$TIMEZONE_INPUT" ]] || timedatectl list-timezones 2>/dev/null | grep -Fxqi "$TIMEZONE_INPUT"; then
-                    break
-                fi
-                warn "Timezone '$TIMEZONE_INPUT' not found in system."
-            done
-            ;;
-    esac
-}
 
 collect_configuration() {
     section "Control Plane configuration"
@@ -650,7 +427,16 @@ collect_configuration() {
         warn "Invalid hostname."
     done
 
-    select_timezone
+    TIMEZONE_INPUT="$(ask_default "Timezone" "UTC")"
+
+    if ! timedatectl list-timezones 2>/dev/null |
+        grep -Fxq "$TIMEZONE_INPUT"; then
+
+        warn "Timezone '${TIMEZONE_INPUT}' not found."
+        warn "Using UTC."
+
+        TIMEZONE_INPUT="UTC"
+    fi
 
     while true; do
         SSH_PORT_INPUT="$(ask_default "SSH port" "22")"
@@ -704,11 +490,10 @@ ADMIN_USER=${ADMIN_USER_INPUT}
 ENABLE_UFW=${ENABLE_UFW}
 ENABLE_FAIL2BAN=${ENABLE_FAIL2BAN}
 ENABLE_SWAP=${ENABLE_SWAP}
-OPENSHIP_NO_HOST_CONTROL=${OPENSHIP_NO_HOST_CONTROL:-}
-OPENSHIP_ACCESS_MODE=${OPENSHIP_ACCESS_MODE:-}
+OPENSHIP_ADMIN_NAME=${OPENSHIP_ADMIN_NAME_INPUT:-}
+OPENSHIP_ADMIN_EMAIL=${OPENSHIP_ADMIN_EMAIL_INPUT:-}
+OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-}
 OPENSHIP_HOST=${OPENSHIP_HOST:-}
-OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL:-}
-OPENSHIP_ACME_EMAIL=${OPENSHIP_ACME_EMAIL:-}
 EOF
 
     chmod 600 "$STATE_FILE"
@@ -741,12 +526,7 @@ configure_hostname() {
 configure_timezone() {
     section "Timezone"
 
-    if ! timedatectl set-timezone "$TIMEZONE_INPUT" 2>/dev/null; then
-        if [[ -f "/usr/share/zoneinfo/$TIMEZONE_INPUT" ]]; then
-            ln -sf "/usr/share/zoneinfo/$TIMEZONE_INPUT" /etc/localtime
-            echo "$TIMEZONE_INPUT" > /etc/timezone
-        fi
-    fi
+    timedatectl set-timezone "$TIMEZONE_INPUT"
 
     success "Timezone: ${TIMEZONE_INPUT}"
 }
@@ -760,11 +540,9 @@ install_base_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
-    dpkg --configure -a 2>/dev/null || true
+    apt-get update
 
-    apt-get update -o DPkg::Lock::Timeout=120
-
-    apt-get install -y -o DPkg::Lock::Timeout=120 \
+    apt-get install -y \
         ca-certificates \
         curl \
         gnupg \
@@ -785,7 +563,7 @@ install_base_packages() {
         fail2ban \
         unattended-upgrades
 
-    apt-get autoremove -y -o DPkg::Lock::Timeout=120
+    apt-get autoremove -y
 
     success "Base packages installed."
 }
@@ -938,14 +716,15 @@ configure_ufw() {
     ufw allow "${SSH_PORT_INPUT}/tcp" \
         comment "SSH"
 
+    # OpenShip Edge
     ufw allow 80/tcp \
-        comment "HTTP"
+        comment "OpenShip HTTP"
 
     ufw allow 443/tcp \
-        comment "HTTPS"
+        comment "OpenShip HTTPS"
 
-    ufw allow 3001/tcp \
-        comment "OpenShip Dashboard"
+    # IMPORTANT:
+    # Dashboard :3001 and API :4000 are intentionally NOT exposed.
 
     ufw --force enable
 
@@ -1031,11 +810,9 @@ install_docker() {
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-${VERSION_CODENAME}} stable
 EOF
 
-    dpkg --configure -a 2>/dev/null || true
+    apt-get update
 
-    apt-get update -o DPkg::Lock::Timeout=120
-
-    apt-get install -y -o DPkg::Lock::Timeout=120 \
+    apt-get install -y \
         docker-ce \
         docker-ce-cli \
         containerd.io \
@@ -1180,81 +957,58 @@ preflight_openship() {
 # ------------------------------------------------------------------------------
 
 collect_bare_openship_credentials() {
-    section "OpenShip Bare configuration"
+    section "OpenShip public URL"
 
-    echo "Configure how this VPS will run and be accessed."
+    echo "OpenShip self-hosted GitHub App integration requires a public HTTPS URL."
+    echo "GitHub must be able to reach the setup callback and webhook endpoint."
     echo
-
-    # 1. Server Role / Host Control
-    local role_idx=0
-    prompt_select role_idx "Server role:" 0 \
-        "Dedicated Manager (Recommended)|Manage REMOTE servers only. No apps on this VPS, no port 80/443 conflicts." \
-        "Hybrid Host|Allow deploying apps directly on this VPS too (enables local host operations)." \
-        "Cancel|Abort installation."
-
-    case "$role_idx" in
-        0)
-            OPENSHIP_NO_HOST_CONTROL="true"
-            ;;
-        1)
-            OPENSHIP_NO_HOST_CONTROL="false"
-            ;;
-        2)
-            die "Installation cancelled."
-            ;;
-    esac
+    echo "Examples:"
+    echo "  https://openship.example.com"
+    echo "  https://control.example.com"
     echo
-
-    # 2. Dashboard Access & Routing
-    local access_idx=0
-    prompt_select access_idx "Dashboard access and domain:" 0 \
-        "Public HTTPS (Reverse Proxy / Cloudflare)|Use your domain behind Nginx or Cloudflare (enables --trust-proxy)." \
-        "Public HTTPS (Managed Auto-SSL)|OpenShip automatically installs OpenResty and Let's Encrypt SSL on this VPS." \
-        "Local / Private|Localhost only (access via SSH tunnel or private IP)." \
-        "Cancel|Abort installation."
-
-    case "$access_idx" in
-        0)
-            OPENSHIP_ACCESS_MODE="proxy"
-            while true; do
-                OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
-                if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
-                    break
-                fi
-                warn "Enter a valid DNS hostname, for example openship.example.com."
-            done
-            OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
-            ;;
-        1)
-            OPENSHIP_ACCESS_MODE="managed_edge"
-            while true; do
-                OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
-                if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
-                    break
-                fi
-                warn "Enter a valid DNS hostname, for example openship.example.com."
-            done
-            OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
-            OPENSHIP_ACME_EMAIL="$(ask_default "Let's Encrypt contact email" "admin@$OPENSHIP_HOST")"
-            ;;
-        2)
-            OPENSHIP_ACCESS_MODE="local"
-            OPENSHIP_DOMAIN_KIND="none"
-            OPENSHIP_PUBLIC_URL=""
-            OPENSHIP_HOST=""
-            ;;
-        3)
-            die "Installation cancelled."
-            ;;
-    esac
+    echo "For a private/local instance, choose Local. GitHub App registration"
+    echo "will not be available until OPENSHIP_PUBLIC_URL is configured later."
     echo
-    if [[ "$OPENSHIP_ACCESS_MODE" != "local" ]]; then
+    echo "OpenShip reachability:"
+    echo
+    echo "  1) Local / private"
+    echo "     Keep the dashboard private on this VPS."
+    echo
+    echo "  2) Public HTTPS domain"
+    echo "     Configure OPENSHIP_PUBLIC_URL for GitHub App callbacks/webhooks."
+    echo
+    echo "  3) Cancel"
+    echo
+    while true; do
+        read -r -p "Select [2]: " reachability </dev/tty
+        reachability="${reachability:-2}"
+        case "$reachability" in
+            1)
+                OPENSHIP_DOMAIN_KIND="none"
+                OPENSHIP_PUBLIC_URL=""
+                OPENSHIP_HOST=""
+                break ;;
+            2)
+                OPENSHIP_DOMAIN_KIND="custom"
+                while true; do
+                    OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
+                    if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+                        break
+                    fi
+                    warn "Enter a valid DNS hostname, for example openship.example.com."
+                done
+                OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+                break ;;
+            3) die "Installation cancelled." ;;
+            *) echo "Invalid choice." ;;
+        esac
+    done
+    echo
+    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
         success "OpenShip public URL: ${OPENSHIP_PUBLIC_URL}"
-        if [[ "$OPENSHIP_ACCESS_MODE" == "proxy" ]]; then
-            warn "Point your DNS / reverse proxy (or Cloudflare) at this VPS."
-        else
-            warn "Make sure DNS points directly to this VPS for Let's Encrypt validation."
-        fi
+        echo
+        warn "Make sure DNS and HTTPS routing for this hostname point to this VPS"
+        warn "before creating the GitHub App."
     else
         success "OpenShip will remain local/private."
     fi
@@ -1264,39 +1018,31 @@ run_bare_openship_setup() {
     collect_bare_openship_credentials
 
     echo
-    echo "Starting OpenShip in Bare mode (embedded database, no Docker)..."
+    echo "Starting OpenShip Bare interactive setup..."
     echo
+    echo "The official OpenShip wizard will now take over."
+    echo "Do not close this terminal during setup."
+    echo
+
+    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
+        export OPENSHIP_PUBLIC_URL
+        export OPENSHIP_HOST
+    else
+        unset OPENSHIP_PUBLIC_URL
+        unset OPENSHIP_HOST
+    fi
 
     [[ -e /dev/tty ]] ||
         die "Interactive terminal /dev/tty is not available for OpenShip setup."
 
-    local up_args=("--bare")
+    # Keep the official guided wizard interactive. On a low-memory Bare host,
+    # Docker is intentionally absent, so the wizard selects the lightweight runtime.
+    openship </dev/tty >/dev/tty 2>/dev/tty
 
-    if [[ "$OPENSHIP_NO_HOST_CONTROL" == "true" ]]; then
-        up_args+=("--no-host-control")
-    fi
+    unset OPENSHIP_PUBLIC_URL
+    unset OPENSHIP_HOST
 
-    if [[ "$OPENSHIP_ACCESS_MODE" == "proxy" ]]; then
-        up_args+=(
-            "--public-url" "$OPENSHIP_PUBLIC_URL"
-            "--trust-proxy"
-        )
-    elif [[ "$OPENSHIP_ACCESS_MODE" == "managed_edge" ]]; then
-        up_args+=(
-            "--public-url" "$OPENSHIP_PUBLIC_URL"
-            "--managed-edge"
-            "--acme-email" "$OPENSHIP_ACME_EMAIL"
-        )
-    fi
-
-    # Explicitly start OpenShip as a lightweight systemd process service (no Docker).
-    openship up "${up_args[@]}" </dev/tty >/dev/tty 2>/dev/tty
-
-    echo
-    log "Configuring OpenShip administrator account..."
-    openship reset-admin-password </dev/tty >/dev/tty 2>/dev/tty || true
-
-    success "OpenShip Bare setup completed."
+    success "OpenShip interactive setup completed."
 }
 
 run_openship_setup() {
@@ -1424,24 +1170,8 @@ print_summary() {
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
         echo -e "${GREEN}OpenShip is configured in BARE mode.${NC}"
-        if [[ "${OPENSHIP_NO_HOST_CONTROL:-}" == "true" ]]; then
-            echo "  Role: Dedicated Remote Manager (--no-host-control)"
-        else
-            echo "  Role: Hybrid Host"
-        fi
     else
         echo -e "${GREEN}OpenShip is configured in STANDARD Docker mode.${NC}"
-    fi
-
-    if [[ -n "${OPENSHIP_PUBLIC_URL:-}" ]]; then
-        echo
-        echo "Dashboard public URL:"
-        echo "  ${OPENSHIP_PUBLIC_URL}"
-        if [[ "${OPENSHIP_ACCESS_MODE:-}" == "proxy" ]]; then
-            echo "  Access: Reverse Proxy / Cloudflare (--trust-proxy)"
-        elif [[ "${OPENSHIP_ACCESS_MODE:-}" == "managed_edge" ]]; then
-            echo "  Access: Managed Edge (OpenResty + Auto-SSL)"
-        fi
     fi
 
     echo
