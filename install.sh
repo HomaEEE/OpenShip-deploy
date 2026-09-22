@@ -603,6 +603,11 @@ ADMIN_USER=${ADMIN_USER_INPUT}
 ENABLE_UFW=${ENABLE_UFW}
 ENABLE_FAIL2BAN=${ENABLE_FAIL2BAN}
 ENABLE_SWAP=${ENABLE_SWAP}
+OPENSHIP_NO_HOST_CONTROL=${OPENSHIP_NO_HOST_CONTROL:-}
+OPENSHIP_ACCESS_MODE=${OPENSHIP_ACCESS_MODE:-}
+OPENSHIP_HOST=${OPENSHIP_HOST:-}
+OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL:-}
+OPENSHIP_ACME_EMAIL=${OPENSHIP_ACME_EMAIL:-}
 EOF
 
     chmod 600 "$STATE_FILE"
@@ -827,15 +832,14 @@ configure_ufw() {
     ufw allow "${SSH_PORT_INPUT}/tcp" \
         comment "SSH"
 
-    # OpenShip Edge
     ufw allow 80/tcp \
-        comment "OpenShip HTTP"
+        comment "HTTP"
 
     ufw allow 443/tcp \
-        comment "OpenShip HTTPS"
+        comment "HTTPS"
 
-    # IMPORTANT:
-    # Dashboard :3001 and API :4000 are intentionally NOT exposed.
+    ufw allow 3001/tcp \
+        comment "OpenShip Dashboard"
 
     ufw --force enable
 
@@ -1069,7 +1073,90 @@ preflight_openship() {
 # OpenShip setup
 # ------------------------------------------------------------------------------
 
+collect_bare_openship_credentials() {
+    section "OpenShip Bare configuration"
+
+    echo "Configure how this VPS will run and be accessed."
+    echo
+
+    # 1. Server Role / Host Control
+    local role_idx=0
+    prompt_select role_idx "Server role:" 0 \
+        "Dedicated Manager (Recommended)|Manage REMOTE servers only. No apps on this VPS, no port 80/443 conflicts." \
+        "Hybrid Host|Allow deploying apps directly on this VPS too (enables local host operations)." \
+        "Cancel|Abort installation."
+
+    case "$role_idx" in
+        0)
+            OPENSHIP_NO_HOST_CONTROL="true"
+            ;;
+        1)
+            OPENSHIP_NO_HOST_CONTROL="false"
+            ;;
+        2)
+            die "Installation cancelled."
+            ;;
+    esac
+    echo
+
+    # 2. Dashboard Access & Routing
+    local access_idx=0
+    prompt_select access_idx "Dashboard access and domain:" 0 \
+        "Public HTTPS (Reverse Proxy / Cloudflare)|Use your domain behind Nginx or Cloudflare (enables --trust-proxy)." \
+        "Public HTTPS (Managed Auto-SSL)|OpenShip automatically installs OpenResty and Let's Encrypt SSL on this VPS." \
+        "Local / Private|Localhost only (access via SSH tunnel or private IP)." \
+        "Cancel|Abort installation."
+
+    case "$access_idx" in
+        0)
+            OPENSHIP_ACCESS_MODE="proxy"
+            while true; do
+                OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
+                if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+                    break
+                fi
+                warn "Enter a valid DNS hostname, for example openship.example.com."
+            done
+            OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+            ;;
+        1)
+            OPENSHIP_ACCESS_MODE="managed_edge"
+            while true; do
+                OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
+                if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+                    break
+                fi
+                warn "Enter a valid DNS hostname, for example openship.example.com."
+            done
+            OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+            OPENSHIP_ACME_EMAIL="$(ask_default "Let's Encrypt contact email" "admin@$OPENSHIP_HOST")"
+            ;;
+        2)
+            OPENSHIP_ACCESS_MODE="local"
+            OPENSHIP_DOMAIN_KIND="none"
+            OPENSHIP_PUBLIC_URL=""
+            OPENSHIP_HOST=""
+            ;;
+        3)
+            die "Installation cancelled."
+            ;;
+    esac
+    echo
+    if [[ "$OPENSHIP_ACCESS_MODE" != "local" ]]; then
+        success "OpenShip public URL: ${OPENSHIP_PUBLIC_URL}"
+        if [[ "$OPENSHIP_ACCESS_MODE" == "proxy" ]]; then
+            warn "Point your DNS / reverse proxy (or Cloudflare) at this VPS."
+        else
+            warn "Make sure DNS points directly to this VPS for Let's Encrypt validation."
+        fi
+    else
+        success "OpenShip will remain local/private."
+    fi
+}
+
 run_bare_openship_setup() {
+    collect_bare_openship_credentials
+
     echo
     echo "Starting OpenShip in Bare mode (embedded database, no Docker)..."
     echo
@@ -1077,8 +1164,27 @@ run_bare_openship_setup() {
     [[ -e /dev/tty ]] ||
         die "Interactive terminal /dev/tty is not available for OpenShip setup."
 
+    local up_args=("--bare")
+
+    if [[ "$OPENSHIP_NO_HOST_CONTROL" == "true" ]]; then
+        up_args+=("--no-host-control")
+    fi
+
+    if [[ "$OPENSHIP_ACCESS_MODE" == "proxy" ]]; then
+        up_args+=(
+            "--public-url" "$OPENSHIP_PUBLIC_URL"
+            "--trust-proxy"
+        )
+    elif [[ "$OPENSHIP_ACCESS_MODE" == "managed_edge" ]]; then
+        up_args+=(
+            "--public-url" "$OPENSHIP_PUBLIC_URL"
+            "--managed-edge"
+            "--acme-email" "$OPENSHIP_ACME_EMAIL"
+        )
+    fi
+
     # Explicitly start OpenShip as a lightweight systemd process service (no Docker).
-    openship up --bare </dev/tty >/dev/tty 2>/dev/tty
+    openship up "${up_args[@]}" </dev/tty >/dev/tty 2>/dev/tty
 
     echo
     log "Configuring OpenShip administrator account..."
@@ -1212,8 +1318,24 @@ print_summary() {
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
         echo -e "${GREEN}OpenShip is configured in BARE mode.${NC}"
+        if [[ "${OPENSHIP_NO_HOST_CONTROL:-}" == "true" ]]; then
+            echo "  Role: Dedicated Remote Manager (--no-host-control)"
+        else
+            echo "  Role: Hybrid Host"
+        fi
     else
         echo -e "${GREEN}OpenShip is configured in STANDARD Docker mode.${NC}"
+    fi
+
+    if [[ -n "${OPENSHIP_PUBLIC_URL:-}" ]]; then
+        echo
+        echo "Dashboard public URL:"
+        echo "  ${OPENSHIP_PUBLIC_URL}"
+        if [[ "${OPENSHIP_ACCESS_MODE:-}" == "proxy" ]]; then
+            echo "  Access: Reverse Proxy / Cloudflare (--trust-proxy)"
+        elif [[ "${OPENSHIP_ACCESS_MODE:-}" == "managed_edge" ]]; then
+            echo "  Access: Managed Edge (OpenResty + Auto-SSL)"
+        fi
     fi
 
     echo
