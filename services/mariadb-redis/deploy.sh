@@ -275,8 +275,6 @@ configure_environment() {
     MARIADB_VERSION="${MARIADB_VERSION:-11.4}"
     MARIADB_PORT="${MARIADB_PORT:-3306}"
     MARIADB_BUFFER_POOL_SIZE="${MARIADB_BUFFER_POOL_SIZE:-256M}"
-    MARIADB_DATABASE="${MARIADB_DATABASE:-app_db}"
-    MARIADB_USER="${MARIADB_USER:-app_user}"
 
     REDIS_VERSION="${REDIS_VERSION:-7.4-alpine}"
     REDIS_PORT="${REDIS_PORT:-6379}"
@@ -295,13 +293,6 @@ configure_environment() {
             echo "No MARIADB_ROOT_PASSWORD configured."
             MARIADB_ROOT_PASSWORD="$(ask_input "Enter MariaDB root password (leave empty to generate)" "$gen_pwd")"
         fi
-    fi
-
-    # MariaDB User Password
-    if [[ -z "${MARIADB_PASSWORD:-}" ]]; then
-        local gen_user_pwd
-        gen_user_pwd="$(generate_random_password 24)"
-        MARIADB_PASSWORD="$gen_user_pwd"
     fi
 
     # Redis Password
@@ -326,9 +317,6 @@ configure_environment() {
 # MariaDB
 MARIADB_VERSION=${MARIADB_VERSION}
 MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
-MARIADB_DATABASE=${MARIADB_DATABASE}
-MARIADB_USER=${MARIADB_USER}
-MARIADB_PASSWORD=${MARIADB_PASSWORD}
 MARIADB_PORT=${MARIADB_PORT}
 MARIADB_BUFFER_POOL_SIZE=${MARIADB_BUFFER_POOL_SIZE}
 
@@ -523,9 +511,6 @@ print_summary() {
     echo
     echo -e "${BOLD}3. Credentials:${NC}"
     echo "   MariaDB Root:     root / ${MARIADB_ROOT_PASSWORD}"
-    if [[ -n "${MARIADB_USER:-}" && -n "${MARIADB_PASSWORD:-}" ]]; then
-        echo "   MariaDB App User: ${MARIADB_USER} / ${MARIADB_PASSWORD} (DB: ${MARIADB_DATABASE})"
-    fi
     echo "   Redis Password:   ${REDIS_PASSWORD}"
     echo
     echo -e "${BOLD}4. Example Laravel .env configuration:${NC}"
@@ -534,7 +519,7 @@ print_summary() {
 DB_CONNECTION=mysql
 DB_HOST=${server_ip}
 DB_PORT=${MARIADB_PORT}
-DB_DATABASE=${MARIADB_DATABASE}
+DB_DATABASE=your_app_db
 DB_USERNAME=root
 DB_PASSWORD=${MARIADB_ROOT_PASSWORD}
 
