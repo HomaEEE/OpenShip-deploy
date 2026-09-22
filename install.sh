@@ -981,7 +981,7 @@ collect_bare_openship_credentials() {
     echo
     while true; do
         read -r -p "Select [2]: " reachability </dev/tty
-        reachability="${reachability:-2}"
+        reachability="\${reachability:-2}"
         case "$reachability" in
             1)
                 OPENSHIP_DOMAIN_KIND="none"
@@ -1005,7 +1005,7 @@ collect_bare_openship_credentials() {
     done
     echo
     if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        success "OpenShip public URL: ${OPENSHIP_PUBLIC_URL}"
+        success "OpenShip public URL: \${OPENSHIP_PUBLIC_URL}"
         echo
         warn "Make sure DNS and HTTPS routing for this hostname point to this VPS"
         warn "before creating the GitHub App."
@@ -1035,22 +1035,14 @@ run_bare_openship_setup() {
     [[ -e /dev/tty ]] ||
         die "Interactive terminal /dev/tty is not available for OpenShip setup."
 
-    local up_args=("--bare")
-    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" && -n "${OPENSHIP_PUBLIC_URL:-}" ]]; then
-        up_args+=("--public-url" "$OPENSHIP_PUBLIC_URL")
-    fi
-
-    # Explicitly start OpenShip as a lightweight systemd process service (no Docker).
-    openship up "${up_args[@]}" </dev/tty >/dev/tty 2>/dev/tty
-
-    echo
-    log "Configuring OpenShip administrator account..."
-    openship reset-admin-password </dev/tty >/dev/tty 2>/dev/tty || true
+    # Keep the official guided wizard interactive. On a low-memory Bare host,
+    # Docker is intentionally absent, so the wizard selects the lightweight runtime.
+    openship </dev/tty >/dev/tty 2>/dev/tty
 
     unset OPENSHIP_PUBLIC_URL
     unset OPENSHIP_HOST
 
-    success "OpenShip Bare setup completed."
+    success "OpenShip interactive setup completed."
 }
 
 run_openship_setup() {
