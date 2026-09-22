@@ -251,20 +251,27 @@ When deploying a new application (via Dockerfile or OpenShip Application):
        external: true
    ```
 
-2. **Project Environment Variables (.env):**
+2. **Project Environment Variables (.env / OpenShip):**
+   
+   **Best Practice — OpenShip "Shared environment":**
+   Add common infrastructure hosts once in project settings so all services (`web`, `queue`, `scheduler`) inherit them:
+   ```env
+   DB_HOST=mariadb
+   DB_PORT=3306
+   REDIS_HOST=redis
+   REDIS_PORT=6379
+   ```
+
+   **Service-specific environment:**
    ```env
    # MariaDB
    DB_CONNECTION=mysql
-   DB_HOST=mariadb
-   DB_PORT=3306
    DB_DATABASE=your_project_db
    DB_USERNAME=root
    DB_PASSWORD=your_mariadb_root_password
 
    # Redis
    REDIS_CLIENT=phpredis
-   REDIS_HOST=redis
-   REDIS_PORT=6379
    REDIS_PASSWORD=your_redis_password   # leave empty if no password configured
    ```
 
@@ -511,20 +518,27 @@ sudo ./deploy-services.sh
        external: true
    ```
 
-2. **Переменные окружения проекта (.env):**
+2. **Переменные окружения проекта (.env / OpenShip):**
+
+   **Рекомендуемый способ — OpenShip «Shared environment»:**
+   Задайте общие хосты баз один раз в настройках проекта в панели OpenShip, и все сервисы стека (`web`, `queue`, `cron`) унаследуют их автоматически:
+   ```env
+   DB_HOST=mariadb
+   DB_PORT=3306
+   REDIS_HOST=redis
+   REDIS_PORT=6379
+   ```
+
+   **Индивидуальные переменные сервиса (Service environment):**
    ```env
    # MariaDB
    DB_CONNECTION=mysql
-   DB_HOST=mariadb
-   DB_PORT=3306
    DB_DATABASE=your_project_db
    DB_USERNAME=root
    DB_PASSWORD=ваш_mariadb_root_password
 
    # Redis
    REDIS_CLIENT=phpredis
-   REDIS_HOST=redis
-   REDIS_PORT=6379
    REDIS_PASSWORD=ваш_redis_password   # оставить пустым, если пароль не задан
    ```
 
