@@ -603,10 +603,6 @@ ADMIN_USER=${ADMIN_USER_INPUT}
 ENABLE_UFW=${ENABLE_UFW}
 ENABLE_FAIL2BAN=${ENABLE_FAIL2BAN}
 ENABLE_SWAP=${ENABLE_SWAP}
-OPENSHIP_ADMIN_NAME=${OPENSHIP_ADMIN_NAME_INPUT:-}
-OPENSHIP_ADMIN_EMAIL=${OPENSHIP_ADMIN_EMAIL_INPUT:-}
-OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-}
-OPENSHIP_HOST=${OPENSHIP_HOST:-}
 EOF
 
     chmod 600 "$STATE_FILE"
@@ -1069,86 +1065,22 @@ preflight_openship() {
 # OpenShip setup
 # ------------------------------------------------------------------------------
 
-collect_bare_openship_credentials() {
-    section "OpenShip public URL"
-
-    echo "OpenShip self-hosted GitHub App integration requires a public HTTPS URL."
-    echo "GitHub must be able to reach the setup callback and webhook endpoint."
-    echo
-    echo "Examples:"
-    echo "  https://openship.example.com"
-    echo "  https://control.example.com"
-    echo
-    echo "For a private/local instance, choose Local. GitHub App registration"
-    echo "will not be available until OPENSHIP_PUBLIC_URL is configured later."
-    echo
-    local reachability_idx=1
-    prompt_select reachability_idx "OpenShip reachability:" 1 \
-        "Local / private|Keep the dashboard private on this VPS." \
-        "Public HTTPS domain|Configure OPENSHIP_PUBLIC_URL for GitHub App callbacks/webhooks." \
-        "Cancel|Abort installation."
-
-    case "$reachability_idx" in
-        0)
-            OPENSHIP_DOMAIN_KIND="none"
-            OPENSHIP_PUBLIC_URL=""
-            OPENSHIP_HOST=""
-            ;;
-        1)
-            OPENSHIP_DOMAIN_KIND="custom"
-            while true; do
-                OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
-                if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
-                    break
-                fi
-                warn "Enter a valid DNS hostname, for example openship.example.com."
-            done
-            OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
-            ;;
-        2)
-            die "Installation cancelled."
-            ;;
-    esac
-    echo
-    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        success "OpenShip public URL: ${OPENSHIP_PUBLIC_URL}"
-        echo
-        warn "Make sure DNS and HTTPS routing for this hostname point to this VPS"
-        warn "before creating the GitHub App."
-    else
-        success "OpenShip will remain local/private."
-    fi
-}
-
 run_bare_openship_setup() {
-    collect_bare_openship_credentials
-
     echo
-    echo "Starting OpenShip Bare interactive setup..."
+    echo "Starting OpenShip in Bare mode (embedded database, no Docker)..."
     echo
-    echo "The official OpenShip wizard will now take over."
-    echo "Do not close this terminal during setup."
-    echo
-
-    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        export OPENSHIP_PUBLIC_URL
-        export OPENSHIP_HOST
-    else
-        unset OPENSHIP_PUBLIC_URL
-        unset OPENSHIP_HOST
-    fi
 
     [[ -e /dev/tty ]] ||
         die "Interactive terminal /dev/tty is not available for OpenShip setup."
 
-    # Keep the official guided wizard interactive. On a low-memory Bare host,
-    # Docker is intentionally absent, so the wizard selects the lightweight runtime.
-    openship </dev/tty >/dev/tty 2>/dev/tty
+    # Explicitly start OpenShip as a lightweight systemd process service (no Docker).
+    openship up --bare </dev/tty >/dev/tty 2>/dev/tty
 
-    unset OPENSHIP_PUBLIC_URL
-    unset OPENSHIP_HOST
+    echo
+    log "Configuring OpenShip administrator account..."
+    openship reset-admin-password </dev/tty >/dev/tty 2>/dev/tty || true
 
-    success "OpenShip interactive setup completed."
+    success "OpenShip Bare setup completed."
 }
 
 run_openship_setup() {
