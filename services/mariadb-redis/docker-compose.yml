@@ -52,3 +52,7 @@ volumes:
     name: openship_mariadb_data
   redis_data:
     name: openship_redis_data
+
+networks:
+  default:
+    name: openship-network
