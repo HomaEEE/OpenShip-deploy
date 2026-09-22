@@ -224,6 +224,60 @@ For child deployment servers (worker nodes), this repository provides an isolate
 2. **Via OpenShip Web UI / Stack:**
    Deploy `services/mariadb-redis/docker-compose.yml` directly from OpenShip as a Git repository stack, and set the environment variables (`MARIADB_ROOT_PASSWORD`, `REDIS_PASSWORD`, etc.) in the OpenShip UI.
 
+#### Connecting projects deployed via Dockerfile:
+
+When deploying a new application (via Dockerfile or OpenShip Application):
+
+1. **Docker Network:**
+   The project container must be attached to `openship-network`:
+   ```bash
+   # CLI docker run:
+   docker run -d \
+     --name my-project \
+     --network openship-network \
+     my-project-image
+   ```
+   Or in project `docker-compose.yml` using Dockerfile:
+   ```yaml
+   services:
+     web:
+       build: .
+       networks:
+         - default
+
+   networks:
+     default:
+       name: openship-network
+       external: true
+   ```
+
+2. **Project Environment Variables (.env):**
+   ```env
+   # MariaDB
+   DB_CONNECTION=mysql
+   DB_HOST=mariadb
+   DB_PORT=3306
+   DB_DATABASE=your_project_db
+   DB_USERNAME=root
+   DB_PASSWORD=your_mariadb_root_password
+
+   # Redis
+   REDIS_CLIENT=phpredis
+   REDIS_HOST=redis
+   REDIS_PORT=6379
+   REDIS_PASSWORD=your_redis_password   # leave empty if no password configured
+   ```
+
+3. **Database creation for a new project:**
+   ```bash
+   docker exec -i openship-mariadb mariadb -u root -p"$MARIADB_ROOT_PASSWORD" -e "
+     CREATE DATABASE IF NOT EXISTS your_project_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+     CREATE USER IF NOT EXISTS 'project_user'@'%' IDENTIFIED BY 'project_secure_password';
+     GRANT ALL PRIVILEGES ON your_project_db.* TO 'project_user'@'%';
+     FLUSH PRIVILEGES;
+   "
+   ```
+
 #### Management commands:
 ```bash
 sudo ./deploy-services.sh --status    # Check containers health
@@ -430,7 +484,61 @@ sudo ./deploy-services.sh
 #### 2. Деплой через панель OpenShip:
 Подключите репозиторий в OpenShip, укажите путь к файлу `services/mariadb-redis/docker-compose.yml` и задайте переменные окружения (`MARIADB_ROOT_PASSWORD`, `REDIS_PASSWORD` и т.д.) в настройках проекта.
 
-#### 3. Управление стеком:
+#### 3. Подключение проектов (развертывание через Dockerfile):
+
+При развертывании нового проекта через Dockerfile или панель OpenShip:
+
+1. **Сетевое подключение:**
+   Контейнер проекта должен быть подключен к Docker-сети `openship-network`:
+   ```bash
+   # Запуск контейнера через Docker CLI:
+   docker run -d \
+     --name my-project \
+     --network openship-network \
+     my-project-image
+   ```
+   Или в `docker-compose.yml` проекта со сборкой из Dockerfile:
+   ```yaml
+   services:
+     web:
+       build: .
+       networks:
+         - default
+
+   networks:
+     default:
+       name: openship-network
+       external: true
+   ```
+
+2. **Переменные окружения проекта (.env):**
+   ```env
+   # MariaDB
+   DB_CONNECTION=mysql
+   DB_HOST=mariadb
+   DB_PORT=3306
+   DB_DATABASE=your_project_db
+   DB_USERNAME=root
+   DB_PASSWORD=ваш_mariadb_root_password
+
+   # Redis
+   REDIS_CLIENT=phpredis
+   REDIS_HOST=redis
+   REDIS_PORT=6379
+   REDIS_PASSWORD=ваш_redis_password   # оставить пустым, если пароль не задан
+   ```
+
+3. **Создание базы данных для нового проекта:**
+   ```bash
+   docker exec -i openship-mariadb mariadb -u root -p"$MARIADB_ROOT_PASSWORD" -e "
+     CREATE DATABASE IF NOT EXISTS your_project_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+     CREATE USER IF NOT EXISTS 'project_user'@'%' IDENTIFIED BY 'project_secure_password';
+     GRANT ALL PRIVILEGES ON your_project_db.* TO 'project_user'@'%';
+     FLUSH PRIVILEGES;
+   "
+   ```
+
+#### 4. Управление стеком:
 ```bash
 sudo ./deploy-services.sh --status   # Статус и healthcheck
 sudo ./deploy-services.sh --logs     # Просмотр логов

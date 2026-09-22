@@ -3,12 +3,59 @@ services:
     image: mariadb:${MARIADB_VERSION:-11.4}
     container_name: openship-mariadb
     restart: unless-stopped
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-256M}
+    networks:
+      default:
+        aliases:
+          - mariadb
+    command: >
+      sh -c '
+        if [ -n "$$SERVER_RAM_GB" ]; then
+          TOTAL_RAM=$$(( SERVER_RAM_GB * 1024 ))
+        elif [ -f /proc/meminfo ]; then
+          TOTAL_RAM=$$(awk "/MemTotal/ {print int(\$$2/1024)}" /proc/meminfo)
+        else
+          TOTAL_RAM=2048
+        fi
+
+        if [ -n "$$SERVER_CPU_CORES" ]; then
+          CORES="$$SERVER_CPU_CORES"
+        elif command -v nproc >/dev/null 2>&1; then
+          CORES=$$(nproc)
+        else
+          CORES=1
+        fi
+
+        if [ -n "$$MARIADB_BUFFER_POOL_SIZE" ]; then
+          BP_SIZE="$$MARIADB_BUFFER_POOL_SIZE"
+        else
+          CALC_BP=$$(( TOTAL_RAM * 40 / 100 ))
+          if [ "$$CALC_BP" -lt 128 ]; then CALC_BP=128; fi
+          BP_SIZE="$${CALC_BP}M"
+        fi
+
+        if [ -n "$$MARIADB_MAX_CONNECTIONS" ]; then
+          MAX_CONN="$$MARIADB_MAX_CONNECTIONS"
+        else
+          CALC_CONN=$$(( 30 + (TOTAL_RAM / 50) ))
+          if [ "$$CALC_CONN" -lt 50 ]; then CALC_CONN=50; fi
+          if [ "$$CALC_CONN" -gt 250 ]; then CALC_CONN=250; fi
+          MAX_CONN="$$CALC_CONN"
+        fi
+
+        echo "[openship-mariadb] Server RAM: $${TOTAL_RAM}MB, Cores: $$CORES | Buffer Pool: $$BP_SIZE | Max Connections: $$MAX_CONN"
+
+        exec docker-entrypoint.sh mariadbd \
+          --character-set-server=utf8mb4 \
+          --collation-server=utf8mb4_unicode_ci \
+          --innodb-buffer-pool-size="$$BP_SIZE" \
+          --max-connections="$$MAX_CONN"
+      '
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      SERVER_RAM_GB: ${SERVER_RAM_GB:-}
+      SERVER_CPU_CORES: ${SERVER_CPU_CORES:-}
+      MARIADB_BUFFER_POOL_SIZE: ${MARIADB_BUFFER_POOL_SIZE:-}
+      MARIADB_MAX_CONNECTIONS: ${MARIADB_MAX_CONNECTIONS:-}
     volumes:
       - mariadb_data:/var/lib/mysql
     healthcheck:
@@ -22,17 +69,52 @@ services:
     image: redis:${REDIS_VERSION:-7.4-alpine}
     container_name: openship-redis
     restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - redis
     command: >
       sh -c '
-        if [ -n "$$REDIS_PASSWORD" ]; then
-          exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory "$${REDIS_MAXMEMORY:-256mb}" --maxmemory-policy "$${REDIS_MAXMEMORY_POLICY:-allkeys-lru}"
+        if [ -n "$$SERVER_RAM_GB" ]; then
+          TOTAL_RAM=$$(( SERVER_RAM_GB * 1024 ))
+        elif [ -f /proc/meminfo ]; then
+          TOTAL_RAM=$$(awk "/MemTotal/ {print int(\$$2/1024)}" /proc/meminfo)
         else
-          exec redis-server --appendonly yes --maxmemory "$${REDIS_MAXMEMORY:-256mb}" --maxmemory-policy "$${REDIS_MAXMEMORY_POLICY:-allkeys-lru}"
+          TOTAL_RAM=2048
         fi
+
+        if [ -n "$$SERVER_CPU_CORES" ]; then
+          CORES="$$SERVER_CPU_CORES"
+        elif command -v nproc >/dev/null 2>&1; then
+          CORES=$$(nproc)
+        else
+          CORES=1
+        fi
+
+        if [ -n "$$REDIS_MAXMEMORY" ]; then
+          MAX_MEM="$$REDIS_MAXMEMORY"
+        else
+          CALC_MEM=$$(( TOTAL_RAM * 15 / 100 ))
+          if [ "$$CALC_MEM" -lt 64 ]; then CALC_MEM=64; fi
+          MAX_MEM="$${CALC_MEM}mb"
+        fi
+
+        POLICY="$${REDIS_MAXMEMORY_POLICY:-allkeys-lru}"
+
+        echo "[openship-redis] Server RAM: $${TOTAL_RAM}MB, Cores: $$CORES | Maxmemory: $$MAX_MEM | Policy: $$POLICY"
+
+        EXTRA_ARGS=""
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          EXTRA_ARGS="--requirepass $$REDIS_PASSWORD"
+        fi
+
+        exec redis-server --appendonly yes --maxmemory "$$MAX_MEM" --maxmemory-policy "$$POLICY" $$EXTRA_ARGS
       '
     environment:
+      SERVER_RAM_GB: ${SERVER_RAM_GB:-}
+      SERVER_CPU_CORES: ${SERVER_CPU_CORES:-}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-256mb}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-}
       REDIS_MAXMEMORY_POLICY: ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
     volumes:
       - redis_data:/data

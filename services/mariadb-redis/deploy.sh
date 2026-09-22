@@ -271,14 +271,40 @@ configure_environment() {
         chmod 600 "$ENV_FILE"
     fi
 
+    # Detect or configure server characteristics
+    if [[ -z "${SERVER_RAM_GB:-}" ]]; then
+        if command_exists free; then
+            local ram_mb
+            ram_mb="$(free -m | awk '/^Mem:/ {print $2}')"
+            SERVER_RAM_GB=$(( (ram_mb + 512) / 1024 ))
+            (( SERVER_RAM_GB < 1 )) && SERVER_RAM_GB=1
+        elif [[ -f /proc/meminfo ]]; then
+            local ram_mb
+            ram_mb="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+            SERVER_RAM_GB=$(( (ram_mb + 512) / 1024 ))
+            (( SERVER_RAM_GB < 1 )) && SERVER_RAM_GB=1
+        else
+            SERVER_RAM_GB="2"
+        fi
+    fi
+
+    if [[ -z "${SERVER_CPU_CORES:-}" ]]; then
+        if command_exists nproc; then
+            SERVER_CPU_CORES="$(nproc)"
+        else
+            SERVER_CPU_CORES="1"
+        fi
+    fi
+
     # Set default ports & versions
     MARIADB_VERSION="${MARIADB_VERSION:-11.4}"
     MARIADB_PORT="${MARIADB_PORT:-3306}"
-    MARIADB_BUFFER_POOL_SIZE="${MARIADB_BUFFER_POOL_SIZE:-256M}"
+    MARIADB_BUFFER_POOL_SIZE="${MARIADB_BUFFER_POOL_SIZE:-}"
+    MARIADB_MAX_CONNECTIONS="${MARIADB_MAX_CONNECTIONS:-}"
 
     REDIS_VERSION="${REDIS_VERSION:-7.4-alpine}"
     REDIS_PORT="${REDIS_PORT:-6379}"
-    REDIS_MAXMEMORY="${REDIS_MAXMEMORY:-256mb}"
+    REDIS_MAXMEMORY="${REDIS_MAXMEMORY:-}"
     REDIS_MAXMEMORY_POLICY="${REDIS_MAXMEMORY_POLICY:-allkeys-lru}"
 
     # MariaDB Root Password
@@ -314,11 +340,16 @@ configure_environment() {
 # OpenShip Worker Services Configuration
 # Generated on: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
+# Server Characteristics
+SERVER_RAM_GB=${SERVER_RAM_GB:-}
+SERVER_CPU_CORES=${SERVER_CPU_CORES:-}
+
 # MariaDB
 MARIADB_VERSION=${MARIADB_VERSION}
 MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
 MARIADB_PORT=${MARIADB_PORT}
 MARIADB_BUFFER_POOL_SIZE=${MARIADB_BUFFER_POOL_SIZE}
+MARIADB_MAX_CONNECTIONS=${MARIADB_MAX_CONNECTIONS}
 
 # Redis
 REDIS_VERSION=${REDIS_VERSION}
