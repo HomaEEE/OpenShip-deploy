@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly LOG_FILE="/var/log/openship-control-doctor.log"
+readonly LOG_FILE="/var/log/openship-doctor.log"
 readonly STATE_FILE="/etc/openship-control/install.conf"
 
 RED='\033[0;31m'
@@ -32,16 +32,19 @@ ADMIN_USER=""
 
 echo
 echo "============================================================"
-echo " OpenShip Control Plane — Doctor"
+echo " OpenShip Diagnostic Doctor"
 echo "============================================================"
 echo
 
 log "Host"
 echo "  Hostname: $(hostname)"
-. /etc/os-release
-echo "  OS:       $PRETTY_NAME"
+if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    echo "  OS:       ${PRETTY_NAME:-Linux}"
+fi
 echo "  Kernel:   $(uname -r)"
-echo "  Arch:     $(dpkg --print-architecture)"
+echo "  Arch:     $(dpkg --print-architecture 2>/dev/null || uname -m)"
 echo "  CPU:      $(nproc)"
 echo "  RAM:      $(free -h | awk '/^Mem:/ {print $2}')"
 echo "  Disk:     $(df -h / | awk 'NR==2 {print $4 " free / " $2}')"
@@ -54,75 +57,75 @@ if [[ -f "$STATE_FILE" ]]; then
     echo "  Mode:     $INSTALL_MODE"
     echo "  SSH port: $SSH_PORT"
     echo "  Admin:    $ADMIN_USER"
-else
-    warn "Installer state not found: $STATE_FILE"
 fi
 
-echo
-log "OpenShip CLI"
+# Control Plane checks (if installed or state file exists)
+if [[ -f "$STATE_FILE" ]] || command -v openship >/dev/null 2>&1; then
+    echo
+    log "OpenShip Control Plane CLI"
 
-if command -v openship >/dev/null 2>&1; then
-    ok "openship command found: $(command -v openship)"
-    openship --version || true
-else
-    fail "openship command not found"
-    FAILED=1
-fi
-
-echo
-log "OpenShip service"
-
-if command -v openship >/dev/null 2>&1; then
-    if openship status; then
-        ok "OpenShip status/API health"
+    if command -v openship >/dev/null 2>&1; then
+        ok "openship command found: $(command -v openship)"
+        openship --version || true
     else
-        fail "OpenShip status/API health"
+        fail "openship command not found"
         FAILED=1
     fi
 
     echo
-    log "OpenShip doctor"
+    log "OpenShip Control Plane Service"
 
-    if openship doctor; then
-        ok "OpenShip doctor"
-    else
-        fail "OpenShip doctor"
-        FAILED=1
+    if command -v openship >/dev/null 2>&1; then
+        if openship status; then
+            ok "OpenShip status/API health"
+        else
+            fail "OpenShip status/API health"
+            FAILED=1
+        fi
+
+        echo
+        log "OpenShip doctor"
+
+        if openship doctor; then
+            ok "OpenShip doctor"
+        else
+            fail "OpenShip doctor"
+            FAILED=1
+        fi
     fi
 fi
 
-echo
-log "Runtime"
-
-if command -v node >/dev/null 2>&1; then
-    echo "  Node: $(node --version)"
-else
-    warn "Node is not installed system-wide (OpenShip may use its bundled runtime)."
-fi
-
-if command -v bun >/dev/null 2>&1; then
-    echo "  Bun:  $(bun --version)"
-else
-    log "Bun: not installed system-wide"
-fi
-
-echo
-log "Docker"
-
+# Worker Database Services checks (if containers or directory exist)
 if command -v docker >/dev/null 2>&1; then
-    echo "  $(docker --version)"
+    echo
+    log "Docker Daemon"
     if systemctl is-active --quiet docker; then
-        ok "Docker daemon is running"
+        ok "Docker daemon is running: $(docker --version)"
     else
-        fail "Docker daemon is not running"
-        FAILED=1
+        warn "Docker daemon is not running"
     fi
-else
-    log "Docker is not installed (expected for Bare mode)."
+
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE '^openship-(mariadb|redis)$'; then
+        echo
+        log "OpenShip Worker Services (MariaDB + Redis)"
+
+        for service in openship-mariadb openship-redis; do
+            if docker ps --format '{{.Names}}' | grep -q "^${service}$"; then
+                health="$(docker inspect --format='{{json .State.Health.Status}}' "$service" 2>/dev/null || echo '"running"')"
+                ok "${service} is running (health: ${health//\"/})"
+            elif docker ps -a --format '{{.Names}}' | grep -q "^${service}$"; then
+                warn "${service} exists but is STOPPED"
+            fi
+        done
+
+        if docker network inspect openship-network >/dev/null 2>&1; then
+            ok "Docker network 'openship-network' is active"
+        fi
+    fi
 fi
 
 echo
-log "Network"
+log "Network & Listening Ports"
 ss -lntp | sed -n '1p;/LISTEN/p' || true
 
 if [[ -n "$SSH_PORT" ]]; then

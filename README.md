@@ -101,10 +101,19 @@ This keeps the installer small and avoids duplicating OpenShip's own networking 
 
 ```text
 OpenShip-deploy/
-├── install.sh     # Initial Control Plane provisioning
-├── update.sh      # OpenShip update wrapper
-├── doctor.sh      # Host and OpenShip diagnostics
-└── README.md      # Documentation
+├── install.sh                  # Initial Control Plane provisioning
+├── update.sh                   # OpenShip update wrapper
+├── doctor.sh                   # Host, OpenShip, and database diagnostics
+├── deploy-services.sh          # Worker database services launcher
+├── config/
+│   └── defaults.env.example    # Configuration environment examples
+├── services/
+│   └── mariadb-redis/          # MariaDB + Redis stack for worker nodes
+│       ├── docker-compose.yml
+│       ├── .env.example
+│       ├── deploy.sh
+│       └── backup.sh
+└── README.md                   # Documentation
 ```
 
 ### Logs and state
@@ -197,6 +206,40 @@ The intended deployment model is:
 ```
 
 The Control Plane should remain dedicated to management. Laravel/Filament applications should be deployed to separate deployment nodes.
+
+### Worker Database Services (MariaDB + Redis)
+
+For child deployment servers (worker nodes), this repository provides an isolated **MariaDB 11.4** + **Redis 7.4** Docker stack.
+
+#### Deployment options:
+
+1. **Via CLI script (recommended on the worker node):**
+   ```bash
+   git clone https://github.com/HomaEEE/OpenShip-deploy.git
+   cd OpenShip-deploy
+   sudo ./deploy-services.sh
+   ```
+   *The script checks/installs Docker, configures the `openship-network`, prompts or auto-generates 32-char passwords, optionally restricts firewall access via UFW, and starts the containers.*
+
+2. **Via OpenShip Web UI / Stack:**
+   Deploy `services/mariadb-redis/docker-compose.yml` directly from OpenShip as a Git repository stack, and set the environment variables (`MARIADB_ROOT_PASSWORD`, `REDIS_PASSWORD`, etc.) in the OpenShip UI.
+
+#### Management commands:
+```bash
+sudo ./deploy-services.sh --status    # Check containers health
+sudo ./deploy-services.sh --logs      # Follow logs in real time
+sudo ./deploy-services.sh --restart   # Restart services
+sudo ./deploy-services.sh --pull      # Pull latest images and restart
+sudo ./deploy-services.sh --stop      # Stop containers (volumes preserved)
+```
+
+#### Backups (`backup.sh`):
+```bash
+cd services/mariadb-redis
+sudo ./backup.sh          # Run backup now
+sudo ./backup.sh --list   # List existing backups
+sudo ./backup.sh --cron   # Install automated daily cron job at 03:00 UTC
+```
 
 ### Security notes
 
@@ -358,15 +401,50 @@ Control Plane рекомендуется держать отдельно от п
 ```text
 OpenShip Control Plane
         │
-        ├── Deployment Node 1
-        │       ├── Laravel
-        │       ├── Filament
-        │       └── other apps
+        ├── Deployment Node 1 (Apps)
+        │       ├── Laravel / Filament
+        │       └── Other web apps
         │
-        └── Deployment Node 2
-                ├── Laravel
-                ├── Filament
-                └── Telegram bot
+        └── Deployment Node 2 (Databases & Cache)
+                ├── MariaDB 11.4 (Docker)
+                └── Redis 7.4 (Docker)
+```
+
+### Службы баз данных для Worker-серверов (MariaDB + Redis)
+
+В каталоге `services/mariadb-redis/` находится готовый стек для развертывания MariaDB и Redis на дочерних серверах:
+
+#### 1. Установка через скрипт на дочернем сервере:
+```bash
+git clone https://github.com/HomaEEE/OpenShip-deploy.git
+cd OpenShip-deploy
+sudo ./deploy-services.sh
+```
+Скрипт автоматически:
+- Проверяет наличие и при необходимости устанавливает Docker и Compose.
+- Создает общую Docker-сеть `openship-network`.
+- Генерирует надежные пароли или читает их из переменных окружения.
+- Настраивает правила фаервола UFW (с возможностью ограничения доступа по IP).
+- Запускает контейнеры и дожидается успешного прохождения healthcheck.
+
+#### 2. Деплой через панель OpenShip:
+Подключите репозиторий в OpenShip, укажите путь к файлу `services/mariadb-redis/docker-compose.yml` и задайте переменные окружения (`MARIADB_ROOT_PASSWORD`, `REDIS_PASSWORD` и т.д.) в настройках проекта.
+
+#### 3. Управление стеком:
+```bash
+sudo ./deploy-services.sh --status   # Статус и healthcheck
+sudo ./deploy-services.sh --logs     # Просмотр логов
+sudo ./deploy-services.sh --restart  # Перезапуск контейнеров
+sudo ./deploy-services.sh --pull     # Обновление образов
+sudo ./deploy-services.sh --stop     # Остановка
+```
+
+#### 4. Резервное копирование (`backup.sh`):
+```bash
+cd services/mariadb-redis
+sudo ./backup.sh         # Создать бэкап MariaDB (gzip) и Redis (RDB)
+sudo ./backup.sh --list  # Список существующих бэкапов
+sudo ./backup.sh --cron  # Установить ежедневный запуск в cron (03:00 UTC)
 ```
 
 ---
@@ -492,10 +570,19 @@ sudo ./doctor.sh
 
 ```text
 OpenShip-deploy/
-├── install.sh
-├── update.sh
-├── doctor.sh
-└── README.md
+├── install.sh                  # Control Plane installer
+├── update.sh                   # OpenShip update tool
+├── doctor.sh                   # System & services doctor
+├── deploy-services.sh          # Worker database services runner
+├── config/
+│   └── defaults.env.example    # Configuration example
+├── services/
+│   └── mariadb-redis/          # MariaDB + Redis stack
+│       ├── docker-compose.yml
+│       ├── .env.example
+│       ├── deploy.sh
+│       └── backup.sh
+└── README.md                   # Documentation
 ```
 
 ## Requirements
