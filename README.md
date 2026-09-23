@@ -1,57 +1,76 @@
-# OpenShip Deploy
+<div align="center">
 
-> Production-ready interactive installer for an OpenShip Control Plane on Ubuntu 24.04 LTS.
+# ⚓ OpenShip Deploy
 
-[English](#english) · [Русский](#русский) · [Українська](#українська)
+**Production-ready provisioning toolkit for [OpenShip](https://openship.io/) Control Plane**
+
+[![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04_LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![Bash](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![amd64 · arm64](https://img.shields.io/badge/arch-amd64%20·%20arm64-blue)](#requirements)
+[![License MIT](https://img.shields.io/badge/license-MIT-green)](#license)
+
+[🇷🇺 Русский](docs/README.ru.md) · [🇺🇦 Українська](docs/README.ua.md)
+
+</div>
 
 ---
 
-## English
+## Overview
 
-### Overview
+**OpenShip Deploy** prepares a clean Ubuntu 24.04 LTS VPS as a dedicated **OpenShip Control Plane** — the lightweight management layer that orchestrates your production servers without ever serving application traffic itself.
 
-**OpenShip Deploy** is a lightweight provisioning toolkit for preparing a clean Ubuntu 24.04 LTS VPS as an [OpenShip](https://openship.io/) Control Plane.
+The installer detects system resources, recommends the appropriate OpenShip runtime, hardens the host, and launches the official OpenShip setup. It deliberately separates OS provisioning from OpenShip itself: the script prepares the server; OpenShip manages its own application, domain, Edge, and deployment configuration.
 
-The installer is designed for both small and standard VPS instances. It detects system resources, recommends the appropriate OpenShip runtime, configures the host, and starts the official OpenShip installation flow.
+---
 
-The project intentionally keeps infrastructure configuration separate from OpenShip itself: the installer prepares the operating system, while OpenShip remains responsible for its own application, dashboard, domain and deployment configuration.
+## Architecture
 
-### Features
+```text
+                    Internet
+                       │
+                   Cloudflare
+                       │
+       ┌───────────────┴───────────────┐
+       │                               │
+ os.example.com                   app.example.com
+       │                               │
+  Control VPS                      Prod VPS
+ Ubuntu 24.04, 1–2 GB           Ubuntu 24.04, 4–8 GB
+       │                               │
+ OpenShip Edge :80/:443         OpenShip Edge :80/:443
+       │                               │
+ OpenShip Bare :3001            Laravel / CRM
+  (Control Plane daemon)        MariaDB + Redis
+       │
+       └────── SSH management ─────────►
+```
 
-- Ubuntu 24.04 LTS support
-- x86_64/amd64 and ARM64 support
-- Automatic CPU, RAM and disk detection
-- Interactive **Bare / Standard** runtime selection
-- Automatic warning and Bare recommendation on VPS instances below 2 GB RAM
-- **Bare mode** using OpenShip's official `--bare` runtime
-- **Standard mode** using Docker Compose
-- Optional 2 GB swap configuration
-- Dedicated Linux administrator account
-- SSH configuration and hardening
-- Optional UFW firewall
-- Optional Fail2ban protection for SSH
-- Automatic security updates
-- Docker installation only when Standard mode is selected
-- OpenShip CLI installation from the official installer
-- OpenShip administrator bootstrap in Bare mode
-- Optional OpenShip custom domain during installation
-- Persistent installer configuration
-- Installation and update logs
-- Post-installation diagnostics
-- Separate update and doctor scripts
+> [!IMPORTANT]
+> **Key invariant**: The Control VPS is **never in the HTTP request path** of production applications.
+> If the Control VPS goes down, all production apps continue running without interruption.
 
-### Runtime modes
+---
 
-| Mode | OpenShip Runtime | Edge (:80/:443) | Docker | Recommended RAM | Use case |
-|---|---|---|---:|---:|---|
-| **Bare** | Native Process | Yes (container) | Edge only | 1–2 GB | Dedicated Control Plane |
-| **Standard** | Docker Compose | Yes (container) | Full stack | 2+ GB | Full Docker stack |
+## Runtime Modes
 
-On a 1–2 GB VPS, Bare mode runs OpenShip as a lightweight native service with an embedded database, using Docker solely for the OpenShip Edge container (:80/:443) to route the control plane domain without running Postgres/Redis containers.
+| Mode | OpenShip Runtime | Proxy (:80/:443) | Docker | Min RAM | Best for |
+|---|---|---|---|---|---|
+| **Bare** | Native process + embedded DB | Edge container | Edge only | 1 GB | Dedicated Control Plane |
+| **Standard** | Docker Compose | Edge container | Full stack | 2 GB | Full Docker environment |
 
-### Installation
+On 1–2 GB VPS instances **Bare mode is recommended**: OpenShip runs as a lightweight native systemd service with an embedded database. Docker is used exclusively for the Edge container routing the control plane domain.
 
-Run on a clean Ubuntu 24.04 VPS:
+---
+
+## Installation
+
+### Option A — One-liner (recommended for a fresh VPS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
+```
+
+### Option B — Clone and run
 
 ```bash
 git clone https://github.com/HomaEEE/OpenShip-deploy.git
@@ -60,709 +79,206 @@ chmod +x *.sh
 sudo ./install.sh
 ```
 
-The installer is intentionally interactive. **No command-line parameters are required.**
-
-### Installation flow
-
-The installer performs:
-
-1. Operating system validation
-2. Architecture detection
-3. Resource detection
-4. Runtime selection
-5. Hostname/timezone configuration
-6. Base package installation
-7. Swap configuration
-8. Administrator account setup
-9. SSH configuration
-10. Firewall configuration
-11. Fail2ban configuration
-12. Automatic security update configuration
-13. Docker installation when required
-14. OpenShip CLI installation
-15. OpenShip pre-flight checks
-16. OpenShip first-run setup
-17. Post-install verification
-
-### OpenShip domain
-
-The installer only asks about the **Control Plane domain**.
-
-You can choose:
-
-- **This machine only** — configure OpenShip without a public domain.
-- **Custom domain** — provide a hostname such as `ops.example.com`.
-
-Application domains are deliberately not configured by this installer. They belong to the OpenShip deployment/Edge layer and are configured later for individual projects.
-
-This keeps the installer small and avoids duplicating OpenShip's own networking configuration.
-
-### Files
-
-```text
-OpenShip-deploy/
-├── install.sh                  # Initial Control Plane provisioning
-├── update.sh                   # OpenShip update wrapper
-├── doctor.sh                   # Host, OpenShip, and database diagnostics
-├── deploy-services.sh          # Worker database services launcher
-├── config/
-│   └── defaults.env.example    # Configuration environment examples
-├── services/
-│   └── mariadb-redis/          # MariaDB + Redis stack for worker nodes
-│       ├── docker-compose.yml
-│       ├── .env.example
-│       ├── deploy.sh
-│       └── backup.sh
-└── README.md                   # Documentation
-```
-
-### Logs and state
-
-Installer log:
-
-```text
-/var/log/openship-control-install.log
-```
-
-Installer state:
-
-```text
-/etc/openship-control/install.conf
-```
-
-Update log:
-
-```text
-/var/log/openship-control-update.log
-```
-
-Diagnostic log:
-
-```text
-/var/log/openship-control-doctor.log
-```
-
-The OpenShip administrator password is **not stored** in the installer state file.
-
-### Updating OpenShip
-
-Check for an available update:
-
-```bash
-sudo ./update.sh --check
-```
-
-Run the update:
-
-```bash
-sudo ./update.sh
-```
-
-### Diagnostics
-
-Run the diagnostic script:
-
-```bash
-sudo ./doctor.sh
-```
-
-It checks, among other things:
-
-- OS and architecture
-- CPU/RAM/disk
-- swap
-- installer state
-- OpenShip CLI
-- OpenShip status
-- OpenShip doctor
-- Node/Bun
-- Docker when installed
-- listening ports
-- SSH configuration
-- UFW
-- Fail2ban
-
-### Recommended architecture
-
-The intended deployment model is:
-
-```text
-                    Internet
-                       │
-                   Cloudflare
-                       │
-        ┌──────────────┴──────────────┐
-        │                             │
-  os.example.com                   noire.ee
-        │                             │
-   Control VPS                     Prod VPS
-(Ubuntu 24.04, 1-2GB)        (Ubuntu 24.04, 4-8GB)
-        │                             │
-  OpenShip Edge (:80/:443)      OpenShip Edge (:80/:443)
-        │                             │
-  OpenShip Bare (:3001)         Laravel / CRM
-  (Control Plane daemon)        MariaDB 11.4 / Redis 7.4
-        │
-        └──────── SSH (management) ───→
-```
-
-> [!IMPORTANT]
-> **Key Architectural Invariant**: The Control VPS is **never in the HTTP request path** for production applications. Production applications (`noire.ee`, `admin.noire.ee`, `api.noire.ee`) connect directly to their respective Production VPS instances. If the Control VPS is powered off, all production applications continue running and serving HTTP traffic without interruption.
-
-The Control Plane should remain dedicated to management. Laravel/Filament applications should be deployed to separate deployment nodes.
-
-### Worker Database Services (MariaDB + Redis)
-
-For child deployment servers (worker nodes), this repository provides an isolated **MariaDB 11.4** + **Redis 7.4** Docker stack.
-
-#### Deployment options:
-
-1. **Via CLI script (recommended on the worker node):**
-   ```bash
-   git clone https://github.com/HomaEEE/OpenShip-deploy.git
-   cd OpenShip-deploy
-   sudo ./deploy-services.sh
-   ```
-   *The script checks/installs Docker, configures the `openship-network`, prompts or auto-generates 32-char passwords, optionally restricts firewall access via UFW, and starts the containers.*
-
-2. **Via OpenShip Web UI / Stack:**
-   Deploy `services/mariadb-redis/docker-compose.yml` directly from OpenShip as a Git repository stack, and set the environment variables (`MARIADB_ROOT_PASSWORD`, `REDIS_PASSWORD`, etc.) in the OpenShip UI.
-
-#### Connecting projects deployed via Dockerfile:
-
-When deploying a new application (via Dockerfile or OpenShip Application):
-
-1. **Docker Network:**
-   The project container must be attached to `openship-network`:
-   ```bash
-   # CLI docker run:
-   docker run -d \
-     --name my-project \
-     --network openship-network \
-     my-project-image
-   ```
-   Or in project `docker-compose.yml` using Dockerfile:
-   ```yaml
-   services:
-     web:
-       build: .
-       networks:
-         - default
-
-   networks:
-     default:
-       name: openship-network
-       external: true
-   ```
-
-2. **Project Environment Variables (.env / OpenShip):**
-   
-   **Best Practice — OpenShip "Shared environment":**
-   Add common infrastructure hosts once in project settings so all services (`web`, `queue`, `scheduler`) inherit them:
-   ```env
-   DB_HOST=mariadb
-   DB_PORT=3306
-   REDIS_HOST=redis
-   REDIS_PORT=6379
-   ```
-
-   **Service-specific environment:**
-   ```env
-   # MariaDB
-   DB_CONNECTION=mysql
-   DB_DATABASE=your_project_db
-   DB_USERNAME=root
-   DB_PASSWORD=your_mariadb_root_password
-
-   # Redis
-   REDIS_CLIENT=phpredis
-   REDIS_PASSWORD=your_redis_password   # leave empty if no password configured
-   ```
-
-3. **Database creation for a new project:**
-   ```bash
-   docker exec -i openship-mariadb mariadb -u root -p"$MARIADB_ROOT_PASSWORD" -e "
-     CREATE DATABASE IF NOT EXISTS your_project_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-     CREATE USER IF NOT EXISTS 'project_user'@'%' IDENTIFIED BY 'project_secure_password';
-     GRANT ALL PRIVILEGES ON your_project_db.* TO 'project_user'@'%';
-     FLUSH PRIVILEGES;
-   "
-   ```
-
-#### Management commands:
-```bash
-sudo ./deploy-services.sh --status    # Check containers health
-sudo ./deploy-services.sh --logs      # Follow logs in real time
-sudo ./deploy-services.sh --restart   # Restart services
-sudo ./deploy-services.sh --pull      # Pull latest images and restart
-sudo ./deploy-services.sh --stop      # Stop containers (volumes preserved)
-```
-
-#### Backups (`backup.sh`):
-```bash
-cd services/mariadb-redis
-sudo ./backup.sh          # Run backup now
-sudo ./backup.sh --list   # List existing backups
-sudo ./backup.sh --cron   # Install automated daily cron job at 03:00 UTC
-```
-
-### Security notes
-
-The installer follows a conservative default approach:
-
-- SSH access is preserved during provisioning.
-- Password authentication is disabled automatically only when an administrator SSH key is available.
-- UFW exposes SSH plus HTTP/HTTPS when enabled.
-- OpenShip dashboard/API ports are not opened directly in UFW.
-- Fail2ban protects SSH when enabled.
-- Secrets supplied to the Bare installer are passed through the OpenShip environment and are not written to the installer state file.
-
-Review the generated configuration before exposing a Control Plane to the public Internet.
-
-### Requirements
-
-- Ubuntu 24.04 LTS
-- Root/sudo access
-- Minimum 768 MiB RAM for Bare mode
-- Minimum 10 GB free disk space
-- amd64 or arm64
-
-**Recommended:** 2 GB+ RAM for Standard mode.
-
-### License
-
-Add your preferred project license here.
+The installer is **fully interactive** — no command-line parameters required.
 
 ---
 
-## Русский
+## What the Installer Does
 
-### О проекте
+1. Validates Ubuntu 24.04 LTS and architecture (amd64 / arm64)
+2. Checks CPU, RAM, disk — recommends Bare on &lt; 2 GB RAM
+3. Selects installation mode (Bare / Standard)
+4. Collects hostname, timezone, SSH port, admin user
+5. Configures OpenShip domain and Edge TLS (Let's Encrypt HTTP-01)
+6. Sets **host control mode** — whether the dashboard terminal can reach this VPS
+7. Installs base packages and applies system tuning (swap, journald, file limits)
+8. Creates a dedicated Linux admin account and hardens SSH
+9. Configures UFW firewall and Fail2ban
+10. Enables automatic security updates
+11. Installs Docker (Edge only in Bare, full stack in Standard)
+12. Installs the official OpenShip CLI from [get.openship.io](https://get.openship.io)
+13. Runs OpenShip first-time setup (`--bare --non-interactive`)
+14. Polls API health-check; rolls back automatically on failure
+15. Prints a post-install verification summary
 
-**OpenShip Deploy** — интерактивный установщик для подготовки чистого VPS на Ubuntu 24.04 LTS под **OpenShip Control Plane**.
+---
 
-Установщик рассчитан как на небольшие VPS с 1–2 GB RAM, так и на стандартные серверы. Он определяет ресурсы сервера, предлагает подходящий режим OpenShip, выполняет базовую настройку Ubuntu и запускает официальный процесс установки OpenShip.
+## Host Control Mode
 
-Установщик намеренно не дублирует функциональность самого OpenShip: он подготавливает ОС и сервер, а OpenShip отвечает за собственный Control Plane, домены, Edge и дальнейшие deployment-задачи.
+During installation you choose whether OpenShip should manage this VPS as a server:
 
-### Возможности
+| Option | Dashboard terminal | Server in OpenShip | Notes |
+|---|---|---|---|
+| **Full control** *(default)* | ✅ Works | ✅ Visible | Same as v2.1.2 — recommended |
+| **Strict isolation** (`--no-host-control`) | ❌ Blocked | ❌ Hidden | Maximum isolation |
 
-- Ubuntu 24.04 LTS
-- amd64 и ARM64
-- автоматическое определение RAM/CPU/диска
-- выбор **Bare / Standard**
-- автоматическое предупреждение на VPS менее 2 GB RAM
-- рекомендация Bare для небольших VPS
-- Bare без Docker через официальный `--bare`
-- Standard на Docker Compose
-- автоматическая настройка swap 2 GB
-- отдельный Linux administrator
-- настройка и hardening SSH
-- опциональный UFW
-- опциональный Fail2ban для SSH
-- unattended security updates
-- Docker устанавливается только для Standard
-- установка OpenShip CLI
-- создание OpenShip administrator в Bare mode
-- настройка домена Control Plane
-- сохранение конфигурации установки
-- отдельные логи
-- post-install проверки
-- отдельные update/doctor скрипты
+> [!NOTE]
+> The default is **Full control**. Choose Strict isolation only if the Control VPS must be invisible to the OpenShip server list.
 
-### Режимы
+---
 
-| Режим | OpenShip Runtime | Edge (:80/:443) | Docker | RAM | Назначение |
-|---|---|---|---:|---:|---|
-| **Bare** | Нативный сервис | Да (контейнер) | Только Edge | 1–2 GB | Выделенный Control Plane |
-| **Standard** | Docker Compose | Да (контейнер) | Полный стек | 2+ GB | Полная Docker-установка |
+## Domain Configuration
 
-Для VPS с 1–2 GB RAM рекомендуется Bare: он запускает OpenShip как нативный сервис со встроенной базой данных, а Docker используется исключительно для контейнера OpenShip Edge (:80/:443).
+| Option | How it works |
+|---|---|
+| **Public HTTPS domain** | OpenShip Edge (:80/:443) handles TLS via Let's Encrypt (HTTP-01 challenge). Point DNS/Cloudflare A-record to this VPS IP. |
+| **Private / local** | Dashboard stays on internal port 3001. Only SSH is exposed in UFW. Configure Cloudflare Tunnel or VPN later. |
 
-### Установка
+> [!NOTE]
+> Application domains (Laravel, CRM, etc.) are **not configured here**. They belong to the OpenShip deployment layer and are set per-project after adding production servers.
 
-```bash
-git clone https://github.com/HomaEEE/OpenShip-deploy.git
-cd OpenShip-deploy
-chmod +x *.sh
-sudo ./install.sh
-```
+---
 
-Параметры командной строки не требуются — установщик работает интерактивно.
+## Worker Database Services (MariaDB + Redis)
 
-### Что делает установщик
-
-1. Проверяет Ubuntu
-2. Определяет архитектуру
-3. Проверяет ресурсы
-4. Предлагает режим OpenShip
-5. Настраивает hostname/timezone
-6. Устанавливает системные пакеты
-7. Настраивает swap
-8. Создаёт администратора
-9. Настраивает SSH
-10. Настраивает UFW
-11. Настраивает Fail2ban
-12. Включает автоматические security updates
-13. Устанавливает Docker только для Standard
-14. Устанавливает OpenShip CLI
-15. Выполняет pre-flight проверки
-16. Запускает первый setup OpenShip
-17. Проверяет результат установки
-
-### Домен
-
-Установщик настраивает только **домен Control Plane**.
-
-Варианты:
-
-- **This machine only** — OpenShip без публичного домена.
-- **Custom domain** — например `ops.example.com`.
-
-Домены Laravel/Filament-приложений здесь не настраиваются. Они относятся к deployment/Edge-уровню OpenShip и задаются для конкретных проектов после подключения deployment node.
-
-### Обновление
-
-Проверка:
+For production/worker VPS nodes this repository provides an isolated **MariaDB 11.4 + Redis 7.4** Docker stack.
 
 ```bash
-sudo ./update.sh --check
-```
-
-Обновление:
-
-```bash
-sudo ./update.sh
-```
-
-### Диагностика
-
-```bash
-sudo ./doctor.sh
-```
-
-Скрипт проверяет состояние VPS, OpenShip, Docker, Node/Bun, SSH, UFW, Fail2ban, swap, диска, памяти и сетевых портов.
-
-### Логи
-
-```text
-/var/log/openship-control-install.log
-/var/log/openship-control-update.log
-/var/log/openship-control-doctor.log
-```
-
-Состояние установщика:
-
-```text
-/etc/openship-control/install.conf
-```
-
-Пароль OpenShip administrator в state-файл не сохраняется.
-
-### Архитектура
-
-```text
-                    Internet
-                       │
-                   Cloudflare
-                       │
-        ┌──────────────┴──────────────┐
-        │                             │
-  os.example.com                   noire.ee
-        │                             │
-   Control VPS                     Prod VPS
-(Ubuntu 24.04, 1-2GB)        (Ubuntu 24.04, 4-8GB)
-        │                             │
-  OpenShip Edge (:80/:443)      OpenShip Edge (:80/:443)
-        │                             │
-  OpenShip Bare (:3001)         Laravel / CRM
-  (Control Plane daemon)        MariaDB 11.4 / Redis 7.4
-        │
-        └──────── SSH (management) ───→
-```
-
-> [!IMPORTANT]
-> **Критическое требование**: Control VPS **никогда не находится в HTTP request path production-приложений**. Трафик production-доменов (`noire.ee`, `admin.noire.ee` и т.д.) направляется напрямую на Prod VPS. Если Control VPS выключен, работающие production-приложения продолжают обслуживать пользователей без перебоев.
-
-### Службы баз данных для Worker-серверов (MariaDB + Redis)
-
-В каталоге `services/mariadb-redis/` находится готовый стек для развертывания MariaDB и Redis на дочерних серверах:
-
-#### 1. Установка через скрипт на дочернем сервере:
-```bash
+# On the worker node
 git clone https://github.com/HomaEEE/OpenShip-deploy.git
 cd OpenShip-deploy
 sudo ./deploy-services.sh
 ```
-Скрипт автоматически:
-- Проверяет наличие и при необходимости устанавливает Docker и Compose.
-- Создает общую Docker-сеть `openship-network`.
-- Генерирует надежные пароли или читает их из переменных окружения.
-- Настраивает правила фаервола UFW (с возможностью ограничения доступа по IP).
-- Запускает контейнеры и дожидается успешного прохождения healthcheck.
 
-#### 2. Деплой через панель OpenShip:
-Подключите репозиторий в OpenShip, укажите путь к файлу `services/mariadb-redis/docker-compose.yml` и задайте переменные окружения (`MARIADB_ROOT_PASSWORD`, `REDIS_PASSWORD` и т.д.) в настройках проекта.
+Or deploy `services/mariadb-redis/docker-compose.yml` directly from the OpenShip web UI as a Git stack.
 
-#### 3. Подключение проектов (развертывание через Dockerfile):
+### Project network
 
-При развертывании нового проекта через Dockerfile или панель OpenShip:
+Attach your application container to the shared `openship-network`:
 
-1. **Сетевое подключение:**
-   Контейнер проекта должен быть подключен к Docker-сети `openship-network`:
-   ```bash
-   # Запуск контейнера через Docker CLI:
-   docker run -d \
-     --name my-project \
-     --network openship-network \
-     my-project-image
-   ```
-   Или в `docker-compose.yml` проекта со сборкой из Dockerfile:
-   ```yaml
-   services:
-     web:
-       build: .
-       networks:
-         - default
-
-   networks:
-     default:
-       name: openship-network
-       external: true
-   ```
-
-2. **Переменные окружения проекта (.env / OpenShip):**
-
-   **Рекомендуемый способ — OpenShip «Shared environment»:**
-   Задайте общие хосты баз один раз в настройках проекта в панели OpenShip, и все сервисы стека (`web`, `queue`, `cron`) унаследуют их автоматически:
-   ```env
-   DB_HOST=mariadb
-   DB_PORT=3306
-   REDIS_HOST=redis
-   REDIS_PORT=6379
-   ```
-
-   **Индивидуальные переменные сервиса (Service environment):**
-   ```env
-   # MariaDB
-   DB_CONNECTION=mysql
-   DB_DATABASE=your_project_db
-   DB_USERNAME=root
-   DB_PASSWORD=ваш_mariadb_root_password
-
-   # Redis
-   REDIS_CLIENT=phpredis
-   REDIS_PASSWORD=ваш_redis_password   # оставить пустым, если пароль не задан
-   ```
-
-3. **Создание базы данных для нового проекта:**
-   ```bash
-   docker exec -i openship-mariadb mariadb -u root -p"$MARIADB_ROOT_PASSWORD" -e "
-     CREATE DATABASE IF NOT EXISTS your_project_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-     CREATE USER IF NOT EXISTS 'project_user'@'%' IDENTIFIED BY 'project_secure_password';
-     GRANT ALL PRIVILEGES ON your_project_db.* TO 'project_user'@'%';
-     FLUSH PRIVILEGES;
-   "
-   ```
-
-#### 4. Управление стеком:
-```bash
-sudo ./deploy-services.sh --status   # Статус и healthcheck
-sudo ./deploy-services.sh --logs     # Просмотр логов
-sudo ./deploy-services.sh --restart  # Перезапуск контейнеров
-sudo ./deploy-services.sh --pull     # Обновление образов
-sudo ./deploy-services.sh --stop     # Остановка
+```yaml
+# project docker-compose.yml
+networks:
+  default:
+    name: openship-network
+    external: true
 ```
 
-#### 4. Резервное копирование (`backup.sh`):
+### Environment variables
+
+```env
+DB_HOST=mariadb
+DB_PORT=3306
+DB_CONNECTION=mysql
+DB_DATABASE=your_project_db
+DB_USERNAME=root
+DB_PASSWORD=your_mariadb_root_password
+
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_CLIENT=phpredis
+REDIS_PASSWORD=your_redis_password
+```
+
+### Stack management
+
+```bash
+sudo ./deploy-services.sh --status    # Health check
+sudo ./deploy-services.sh --logs      # Live logs
+sudo ./deploy-services.sh --restart   # Restart containers
+sudo ./deploy-services.sh --pull      # Pull latest images
+sudo ./deploy-services.sh --stop      # Stop (volumes preserved)
+```
+
+### Backups
+
 ```bash
 cd services/mariadb-redis
-sudo ./backup.sh         # Создать бэкап MariaDB (gzip) и Redis (RDB)
-sudo ./backup.sh --list  # Список существующих бэкапов
-sudo ./backup.sh --cron  # Установить ежедневный запуск в cron (03:00 UTC)
+sudo ./backup.sh          # Run backup now
+sudo ./backup.sh --list   # List existing backups
+sudo ./backup.sh --cron   # Install daily cron at 03:00 UTC
 ```
 
 ---
 
-## Українська
-
-### Проєкт
-
-**OpenShip Deploy** — інтерактивний інсталятор для підготовки чистого VPS на Ubuntu 24.04 LTS під **OpenShip Control Plane**.
-
-Інсталятор підтримує як невеликі VPS із 1–2 GB RAM, так і стандартні сервери. Він визначає ресурси системи, пропонує відповідний режим OpenShip, налаштовує Ubuntu та запускає офіційний процес встановлення OpenShip.
-
-Інсталятор не дублює функціональність OpenShip: він відповідає за підготовку ОС і сервера, а OpenShip — за Control Plane, домени, Edge та подальший deployment.
-
-### Можливості
-
-- Ubuntu 24.04 LTS
-- amd64 та ARM64
-- автоматичне визначення RAM/CPU/диска
-- вибір **Bare / Standard**
-- попередження для VPS із RAM менше 2 GB
-- рекомендація Bare для невеликих VPS
-- Bare без Docker через офіційний `--bare`
-- Standard на Docker Compose
-- автоматичне налаштування swap 2 GB
-- окремий Linux administrator
-- налаштування SSH
-- опціональний UFW
-- опціональний Fail2ban для SSH
-- автоматичні security updates
-- Docker встановлюється лише у Standard
-- встановлення OpenShip CLI
-- створення OpenShip administrator у Bare mode
-- налаштування домену Control Plane
-- збереження конфігурації
-- логи встановлення
-- post-install діагностика
-- окремі update/doctor скрипти
-
-### Режими встановлення
-
-| Режим | OpenShip Runtime | Edge (:80/:443) | Docker | RAM | Призначення |
-|---|---|---|---:|---:|---|
-| **Bare** | Нативний процес | Так (контейнер) | Тільки Edge | 1–2 GB | Виділений Control Plane |
-| **Standard** | Docker Compose | Так (контейнер) | Повний стек | 2+ GB | Повна Docker-інсталяція |
-
-Для VPS із 1–2 GB RAM рекомендується Bare.
-
-### Встановлення
+## Updating OpenShip
 
 ```bash
-git clone https://github.com/HomaEEE/OpenShip-deploy.git
-cd OpenShip-deploy
-chmod +x *.sh
-sudo ./install.sh
+sudo ./update.sh --check   # Check for available update
+sudo ./update.sh           # Apply update
 ```
 
-Командні параметри не потрібні — інсталятор працює в інтерактивному режимі.
+---
 
-### Що робить інсталятор
-
-1. Перевіряє Ubuntu
-2. Визначає архітектуру
-3. Перевіряє ресурси
-4. Пропонує режим OpenShip
-5. Налаштовує hostname/timezone
-6. Встановлює системні пакети
-7. Налаштовує swap
-8. Створює адміністратора
-9. Налаштовує SSH
-10. Налаштовує UFW
-11. Налаштовує Fail2ban
-12. Вмикає автоматичні security updates
-13. Встановлює Docker лише для Standard
-14. Встановлює OpenShip CLI
-15. Виконує pre-flight перевірки
-16. Запускає перше налаштування OpenShip
-17. Перевіряє результат
-
-### Домен
-
-Інсталятор налаштовує лише **домен Control Plane**:
-
-- **This machine only**
-- **Custom domain**, наприклад `ops.example.com`
-
-Домени Laravel/Filament застосунків не налаштовуються цим скриптом. Вони належать до deployment/Edge-рівня OpenShip та налаштовуються для конкретних проєктів після підключення deployment node.
-
-### Оновлення
-
-```bash
-sudo ./update.sh --check
-sudo ./update.sh
-```
-
-### Діагностика
+## Diagnostics
 
 ```bash
 sudo ./doctor.sh
 ```
 
-Перевіряються OpenShip, Docker, Node/Bun, SSH, UFW, Fail2ban, swap, RAM, диск та мережеві порти.
-
-### Логи
-
-```text
-/var/log/openship-control-install.log
-/var/log/openship-control-update.log
-/var/log/openship-control-doctor.log
-```
-
-Конфігурація інсталятора:
-
-```text
-/etc/openship-control/install.conf
-```
-
-Пароль адміністратора OpenShip не зберігається у state-файлі.
-
-### Архітектура
-
-```text
-                    Internet
-                       │
-                   Cloudflare
-                       │
-        ┌──────────────┴──────────────┐
-        │                             │
-  os.example.com                   noire.ee
-        │                             │
-   Control VPS                     Prod VPS
-(Ubuntu 24.04, 1-2GB)        (Ubuntu 24.04, 4-8GB)
-        │                             │
-  OpenShip Edge (:80/:443)      OpenShip Edge (:80/:443)
-        │                             │
-  OpenShip Bare (:3001)         Laravel / CRM
-  (Control Plane daemon)        MariaDB 11.4 / Redis 7.4
-        │
-        └──────── SSH (management) ───→
-```
-
-> [!IMPORTANT]
-> **Критична вимога**: Control VPS **ніколи не знаходиться в HTTP request path production-застосунків**. Трафік production-доменів (`noire.ee`, `admin.noire.ee` тощо) йде безпосередньо на Prod VPS. Якщо Control VPS вимкнено, працюючі production-застосунки продовжують обслуговувати користувачів без перерв.
+Checks: OS · architecture · CPU/RAM/disk · swap · installer state · OpenShip CLI · OpenShip status · Node/Bun · Docker · listening ports · SSH · UFW · Fail2ban
 
 ---
 
-## Project structure
+## Logs & State
+
+| File | Contents |
+|---|---|
+| `/var/log/openship-control-install.log` | Installation log |
+| `/var/log/openship-control-update.log` | Update log |
+| `/var/log/openship-control-doctor.log` | Diagnostic log |
+| `/etc/openship-control/install.conf` | Installer state |
+
+> [!NOTE]
+> The OpenShip administrator password is **never stored** in the installer state file.
+
+---
+
+## Project Structure
 
 ```text
 OpenShip-deploy/
-├── install.sh                  # Control Plane installer
-├── update.sh                   # OpenShip update tool
-├── doctor.sh                   # System & services doctor
-├── deploy-services.sh          # Worker database services runner
+├── install.sh                  # Control Plane provisioner
+├── update.sh                   # OpenShip update helper
+├── doctor.sh                   # System & service diagnostics
+├── deploy-services.sh          # Worker database stack runner
 ├── config/
-│   └── defaults.env.example    # Configuration example
+│   └── defaults.env.example    # Environment variable reference
+├── docs/
+│   ├── README.ru.md            # Документация на русском
+│   └── README.ua.md            # Документація українською
 ├── services/
-│   └── mariadb-redis/          # MariaDB + Redis stack
+│   └── mariadb-redis/
 │       ├── docker-compose.yml
 │       ├── .env.example
 │       ├── deploy.sh
 │       └── backup.sh
-└── README.md                   # Documentation
+└── README.md                   # This file (EN)
 ```
-
-## Requirements
-
-- Ubuntu 24.04 LTS
-- root/sudo
-- минимум 768 MiB RAM для Bare
-- минимум 10 GB свободного места
-- amd64 или arm64
-
-Для Standard рекомендуется **2 GB RAM и более**.
-
-## Official OpenShip documentation
-
-[OpenShip Documentation](https://openship.io/docs/)
 
 ---
 
-## Status
+## Requirements
 
-This project is intended as a practical provisioning layer around the official OpenShip installation process.
+- **OS**: Ubuntu 24.04 LTS
+- **Access**: root or sudo
+- **RAM**: 768 MiB minimum (Bare) · 2 GB+ recommended (Standard)
+- **Disk**: 10 GB free minimum
+- **Arch**: amd64 or arm64
 
-OpenShip itself remains the source of truth for supported runtime, CLI options and deployment behavior.
+---
+
+## Security Notes
+
+- SSH access is preserved throughout provisioning.
+- Password authentication is disabled only when an admin SSH key is detected.
+- UFW opens `:80/:443` exclusively when OpenShip Edge is enabled.
+- Dashboard `:3001` and API `:4000` are never exposed directly by UFW.
+- Fail2ban: 5 attempts / 10 min / 1 hour ban.
+- Secrets are passed via environment and are not written to the state file.
+- Health-check failure triggers automatic rollback — service is stopped and logs are printed.
+
+---
+
+## Official Documentation
+
+[openship.io/docs](https://openship.io/docs/)
+
+---
+
+## License
+
+MIT
+
+
+> Production-ready interactive installer for an OpenShip Control Plane on Ubuntu 24.04 LTS.
