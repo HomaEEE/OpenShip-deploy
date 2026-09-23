@@ -1277,12 +1277,12 @@ wait_for_api_healthy() {
     local interval=10
     local attempt=0
 
-    log "Polling http://localhost:${api_port}/ — up to $((retries * interval / 60)) minutes..."
+    log "Polling http://localhost:${api_port}/api/health — up to $((retries * interval / 60)) minutes..."
 
     while (( attempt < retries )); do
         attempt=$(( attempt + 1 ))
 
-        if curl -fsS --max-time 5 "http://localhost:${api_port}/" >/dev/null 2>&1; then
+        if curl -fsS --max-time 5 "http://localhost:${api_port}/api/health" >/dev/null 2>&1; then
             success "OpenShip API is healthy (attempt ${attempt}/${retries})."
             return
         fi
