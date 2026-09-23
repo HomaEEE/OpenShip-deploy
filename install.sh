@@ -679,9 +679,11 @@ install_base_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
-    apt-get update
+    log "Updating package lists..."
+    apt-get update -qq >> "$LOG_FILE" 2>&1
 
-    apt-get install -y \
+    log "Installing base packages..."
+    apt-get install -y -qq \
         ca-certificates \
         curl \
         gnupg \
@@ -701,11 +703,11 @@ install_base_packages() {
         ufw \
         fail2ban \
         unattended-upgrades \
-        systemd-timesyncd
+        systemd-timesyncd >> "$LOG_FILE" 2>&1
 
-    apt-get autoremove -y
+    apt-get autoremove -y -qq >> "$LOG_FILE" 2>&1
 
-    success "Base packages installed (including btop & systemd-timesyncd)."
+    success "Base packages installed."
 }
 
 # ------------------------------------------------------------------------------
@@ -716,15 +718,15 @@ update_system() {
     section "System update"
 
     log "Updating package lists..."
-    apt-get update
+    apt-get update -qq >> "$LOG_FILE" 2>&1
 
-    log "Upgrading system packages..."
-    DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    log "Upgrading system packages (this may take a few minutes)..."
+    DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
         -o Dpkg::Options::="--force-confdef" \
-        -o Dpkg::Options::="--force-confold"
+        -o Dpkg::Options::="--force-confold" >> "$LOG_FILE" 2>&1
 
-    apt-get autoremove -y
-    apt-get clean
+    apt-get autoremove -y -qq >> "$LOG_FILE" 2>&1
+    apt-get clean -qq >> "$LOG_FILE" 2>&1
 
     if [[ -f /var/run/reboot-required ]]; then
         warn "A system restart is recommended after kernel/library updates."
@@ -760,6 +762,7 @@ SystemMaxUse=200M
 RuntimeMaxUse=100M
 EOF
     systemctl restart systemd-journald 2>/dev/null || true
+    sysctl --system >> "$LOG_FILE" 2>&1 || true
 
     success "System tuning applied."
 }
@@ -1020,16 +1023,17 @@ install_docker() {
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-${VERSION_CODENAME}} stable
 EOF
 
-    apt-get update
+    apt-get update -qq >> "$LOG_FILE" 2>&1
 
-    apt-get install -y \
+    log "Installing Docker CE..."
+    apt-get install -y -qq \
         docker-ce \
         docker-ce-cli \
         containerd.io \
         docker-buildx-plugin \
-        docker-compose-plugin
+        docker-compose-plugin >> "$LOG_FILE" 2>&1
 
-    systemctl enable --now docker
+    systemctl enable --now docker >> "$LOG_FILE" 2>&1
 
     docker --version
     docker compose version
@@ -1277,19 +1281,23 @@ wait_for_api_healthy() {
     local interval=10
     local attempt=0
 
-    log "Polling http://localhost:${api_port}/api/health — up to $((retries * interval / 60)) minutes..."
+    log "Polling /api/health — up to $((retries * interval / 60)) minutes..."
+    printf "      "
 
     while (( attempt < retries )); do
         attempt=$(( attempt + 1 ))
 
         if curl -fsS --max-time 5 "http://localhost:${api_port}/api/health" >/dev/null 2>&1; then
+            echo  # newline after dots
             success "OpenShip API is healthy (attempt ${attempt}/${retries})."
             return
         fi
 
-        log "Attempt ${attempt}/${retries}: API not ready yet, waiting ${interval}s..."
+        printf "."
         sleep "$interval"
     done
+
+    echo  # newline after dots
 
     rollback_bare_openship
 }
