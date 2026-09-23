@@ -113,6 +113,55 @@ section() {
     echo
 }
 
+run_task() {
+    local msg="$1"
+    shift
+    local pid i=0
+    local frames=(
+        "[■         ]"
+        "[■■        ]"
+        "[■■■       ]"
+        "[ ■■■      ]"
+        "[  ■■■     ]"
+        "[   ■■■    ]"
+        "[    ■■■   ]"
+        "[     ■■■  ]"
+        "[      ■■■ ]"
+        "[       ■■■]"
+        "[        ■■]"
+        "[         ■]"
+    )
+
+    ("$@") >> "$LOG_FILE" 2>&1 &
+    pid=$!
+
+    if [[ -e /dev/tty && -w /dev/tty ]]; then
+        while kill -0 "$pid" 2>/dev/null; do
+            printf "\r  ${CYAN}%s${NC} %s..." "${frames[i]}" "$msg" >/dev/tty 2>/dev/null || break
+            i=$(( (i + 1) % ${#frames[@]} ))
+            sleep 0.1
+        done
+        wait "$pid"
+        local status=$?
+        if (( status == 0 )); then
+            printf "\r\033[K  ${GREEN}✔${NC} %s\n" "$msg" >/dev/tty 2>/dev/null || success "$msg"
+        else
+            printf "\r\033[K  ${RED}✖${NC} %s (failed, exit %d)\n" "$msg" "$status" >/dev/tty 2>/dev/null || error "$msg failed"
+            return "$status"
+        fi
+    else
+        log "${msg}..."
+        wait "$pid"
+        local status=$?
+        if (( status == 0 )); then
+            success "$msg"
+        else
+            error "$msg (failed, exit $status)"
+            return "$status"
+        fi
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # Error handling
 # ------------------------------------------------------------------------------
@@ -900,11 +949,9 @@ install_base_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
-    log "Updating package lists..."
-    apt-get update -qq >> "$LOG_FILE" 2>&1
+    run_task "Updating package lists" apt-get update -qq
 
-    log "Installing base packages..."
-    apt-get install -y -qq \
+    run_task "Installing base packages" apt-get install -y -qq \
         ca-certificates \
         curl \
         gnupg \
@@ -924,11 +971,9 @@ install_base_packages() {
         ufw \
         fail2ban \
         unattended-upgrades \
-        systemd-timesyncd >> "$LOG_FILE" 2>&1
+        systemd-timesyncd
 
-    apt-get autoremove -y -qq >> "$LOG_FILE" 2>&1
-
-    success "Base packages installed."
+    run_task "Cleaning up unused packages" apt-get autoremove -y -qq
 }
 
 # ------------------------------------------------------------------------------
@@ -938,23 +983,18 @@ install_base_packages() {
 update_system() {
     section "System update"
 
-    log "Updating package lists..."
-    apt-get update -qq >> "$LOG_FILE" 2>&1
+    run_task "Updating package lists" apt-get update -qq
 
-    log "Upgrading system packages (this may take a few minutes)..."
-    DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
+    run_task "Upgrading system packages" env DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
         -o Dpkg::Options::="--force-confdef" \
-        -o Dpkg::Options::="--force-confold" >> "$LOG_FILE" 2>&1
+        -o Dpkg::Options::="--force-confold"
 
-    apt-get autoremove -y -qq >> "$LOG_FILE" 2>&1
-    apt-get clean -qq >> "$LOG_FILE" 2>&1
+    run_task "Cleaning up package cache" bash -c "apt-get autoremove -y -qq && apt-get clean -qq"
 
     if [[ -f /var/run/reboot-required ]]; then
         warn "A system restart is recommended after kernel/library updates."
         warn "You can complete the OpenShip installation now and reboot afterward."
     fi
-
-    success "System packages updated."
 }
 
 # ------------------------------------------------------------------------------
@@ -1228,38 +1268,26 @@ install_docker() {
         return
     fi
 
-    log "Installing official Docker Engine..."
-    install -m 0755 -d /etc/apt/keyrings
-
-    curl -fsSL \
-        https://download.docker.com/linux/ubuntu/gpg \
-        -o /etc/apt/keyrings/docker.asc
-
-    chmod a+r /etc/apt/keyrings/docker.asc
-
-    # shellcheck disable=SC1091
-    source /etc/os-release
-
-    cat > /etc/apt/sources.list.d/docker.list <<EOF
+    run_task "Adding Docker repository" bash -c '
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+        # shellcheck disable=SC1091
+        source /etc/os-release
+        cat > /etc/apt/sources.list.d/docker.list <<EOF
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-${VERSION_CODENAME}} stable
 EOF
+        apt-get update -qq
+    '
 
-    apt-get update -qq >> "$LOG_FILE" 2>&1
-
-    log "Installing Docker CE..."
-    apt-get install -y -qq \
+    run_task "Installing Docker CE Engine" apt-get install -y -qq \
         docker-ce \
         docker-ce-cli \
         containerd.io \
         docker-buildx-plugin \
-        docker-compose-plugin >> "$LOG_FILE" 2>&1
+        docker-compose-plugin
 
-    systemctl enable --now docker >> "$LOG_FILE" 2>&1
-
-    docker --version
-    docker compose version
-
-    success "Docker Engine installed."
+    run_task "Starting Docker daemon" systemctl enable --now docker
 }
 
 # ------------------------------------------------------------------------------
@@ -1324,13 +1352,11 @@ install_openship_cli() {
     section "OpenShip CLI"
 
     if command_exists openship; then
-        success "OpenShip CLI already installed: $(openship --version || true)"
+        success "OpenShip CLI already installed: $(openship --version 2>/dev/null || true)"
         return
     fi
 
-    log "Installing official OpenShip CLI..."
-
-    curl -fsSL "$OPENSHIP_INSTALL_URL" | sh
+    run_task "Downloading and installing OpenShip CLI" bash -c "curl -fsSL '$OPENSHIP_INSTALL_URL' | sh"
 
     export PATH="/root/.openship/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
 
@@ -1343,7 +1369,7 @@ install_openship_cli() {
     command_exists openship ||
         die "OpenShip CLI was not found after installation."
 
-    openship --version || true
+    success "OpenShip CLI ready: $(openship --version 2>/dev/null || true)"
 
     success "OpenShip CLI installed."
 }
@@ -1542,30 +1568,30 @@ configure_caddy() {
     section "Caddy Reverse Proxy"
 
     if ! command_exists caddy; then
-        log "Installing Caddy web server..."
-        apt-get update -qq
-        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+        run_task "Adding Caddy repository" bash -c "
+            apt-get update -qq
+            apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+            rm -f /etc/apt/sources.list.d/caddy-stable.sources
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes 2>/dev/null || true
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+            apt-get update -qq
+        "
 
-        rm -f /etc/apt/sources.list.d/caddy-stable.sources
-        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes 2>/dev/null || true
-        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-
-        apt-get update -qq
-        apt-get install -y caddy
+        run_task "Installing Caddy web server" apt-get install -y -qq caddy
     else
         success "Caddy is already installed."
     fi
 
-    log "Configuring /etc/caddy/Caddyfile for ${OPENSHIP_HOST} -> 127.0.0.1:3001..."
-    mkdir -p /etc/caddy
-    cat > /etc/caddy/Caddyfile <<EOF
+    run_task "Configuring Caddyfile (${OPENSHIP_HOST} -> :3001)" bash -c "
+        mkdir -p /etc/caddy
+        cat > /etc/caddy/Caddyfile <<EOF
 ${OPENSHIP_HOST} {
     reverse_proxy 127.0.0.1:3001
 }
 EOF
-
-    systemctl enable caddy
-    systemctl restart caddy
+        systemctl enable caddy
+        systemctl restart caddy
+    "
 
     success "Caddy configured and running for https://${OPENSHIP_HOST}"
 }
@@ -1575,42 +1601,35 @@ EOF
 # ------------------------------------------------------------------------------
 
 post_install_checks() {
-    section "Post-install verification"
+    # Detailed system diagnostic output is written exclusively to the log file
+    {
+        echo "=== Post-install verification ==="
+        echo "OpenShip status:"
+        openship status || true
 
-    echo
-    log "OpenShip status:"
-    openship status || true
+        if command_exists docker; then
+            echo "Docker containers:"
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+        fi
 
-    echo
-    if command_exists docker; then
-        log "Docker containers:"
-        docker ps --format \
-            'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
-    fi
+        echo "Memory:"
+        free -h
 
-    echo
-    log "Memory:"
-    free -h
+        echo "Disk:"
+        df -h /
 
-    echo
-    log "Disk:"
-    df -h /
+        echo "Swap:"
+        swapon --show || true
 
-    echo
-    log "Swap:"
-    swapon --show || true
+        echo "Listening ports:"
+        ss -lntp || true
 
-    echo
-    log "Listening ports:"
-    ss -lntp || true
+        echo "Firewall:"
+        ufw status verbose || true
 
-    echo
-    log "Firewall:"
-    ufw status verbose || true
-
-    echo
-    log "Fail2ban:"
-    fail2ban-client status sshd 2>/dev/null || true
+        echo "Fail2ban:"
+        fail2ban-client status sshd 2>/dev/null || true
+    } >> "$LOG_FILE" 2>&1
 }
 
 # ------------------------------------------------------------------------------
@@ -1618,6 +1637,8 @@ post_install_checks() {
 # ------------------------------------------------------------------------------
 
 print_summary() {
+    clear 2>/dev/null || true
+
     section "Installation complete"
 
     local mode_label="${INSTALL_MODE^^}"
@@ -1628,21 +1649,31 @@ print_summary() {
         proxy_label="OpenShip Edge (Docker)"
     fi
 
+    local hc_label="enabled"
+    if [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" == "true" ]]; then
+        hc_label="disabled"
+    fi
+
+    local domain_label="${OPENSHIP_HOST:-none}"
+    if [[ -z "$domain_label" || "$domain_label" == "none" ]]; then
+        domain_label="none (private / port 3001)"
+    fi
+
     echo -e "  ${BOLD}${CYAN}OpenShip Control Plane${NC}"
     echo
-    printf "  ${DIM}%-18s${NC}  %s\n" "Mode"        "$mode_label"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Mode"          "$mode_label"
     printf "  ${DIM}%-18s${NC}  %s\n" "Host control"  "$hc_label"
-    printf "  ${DIM}%-18s${NC}  %s\n" "Hostname"     "${HOSTNAME_INPUT}"
-    printf "  ${DIM}%-18s${NC}  %s\n" "Timezone"     "${TIMEZONE_INPUT}"
-    printf "  ${DIM}%-18s${NC}  %s:%s\n" "SSH"       "${ADMIN_USER_INPUT}" "${SSH_PORT_INPUT}"
-    printf "  ${DIM}%-18s${NC}  %s\n" "UFW"          "${ENABLE_UFW}"
-    printf "  ${DIM}%-18s${NC}  %s\n" "Fail2ban"     "${ENABLE_FAIL2BAN}"
-    printf "  ${DIM}%-18s${NC}  %s GB\n" "Swap"       "${SWAP_SIZE_GB:-2}"
-    printf "  ${DIM}%-18s${NC}  %s\n" "Domain"       "$domain_label"
-    printf "  ${DIM}%-18s${NC}  %s\n" "Proxy"        "$proxy_label"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Hostname"      "${HOSTNAME_INPUT}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Timezone"      "${TIMEZONE_INPUT}"
+    printf "  ${DIM}%-18s${NC}  %s:%s\n" "SSH"        "${ADMIN_USER_INPUT}" "${SSH_PORT_INPUT}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "UFW"           "${ENABLE_UFW}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Fail2ban"      "${ENABLE_FAIL2BAN}"
+    printf "  ${DIM}%-18s${NC}  %s GB\n" "Swap"        "${SWAP_SIZE_GB:-2}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Domain"        "$domain_label"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Proxy"         "$proxy_label"
     echo
-    printf "  ${DIM}%-18s${NC}  %s\n" "State file"   "${STATE_FILE}"
-    printf "  ${DIM}%-18s${NC}  %s\n" "Install log"  "${LOG_FILE}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "State file"    "${STATE_FILE}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Install log"   "${LOG_FILE}"
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
