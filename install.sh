@@ -697,7 +697,9 @@ collect_configuration() {
     # Timezone — auto-detect → region → city
     # ------------------------------------------------------------------
     _select_timezone() {
-        local auto_tz="" client_ip="${SSH_CLIENT%% *}"
+        local auto_tz=""
+        local ssh_raw="${SSH_CLIENT:-${SSH_CONNECTION:-}}"
+        local client_ip="${ssh_raw%% *}"
 
         # Try client timezone via SSH IP
         if [[ -n "$client_ip" && ! "$client_ip" =~ ^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.) ]]; then
