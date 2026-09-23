@@ -37,6 +37,11 @@ readonly LOW_RAM_MB=1024
 readonly RECOMMENDED_RAM_MB=2048
 readonly MIN_DISK_GB=10
 
+# Caddy reverse proxy variables
+CADDY_SSL_MODE="auto"
+CADDY_ORIGIN_CERT_PATH=""
+CADDY_ORIGIN_KEY_PATH=""
+
 # ------------------------------------------------------------------------------
 # Colors
 # ------------------------------------------------------------------------------
@@ -479,6 +484,93 @@ select_installation_mode() {
 # Configuration
 # ------------------------------------------------------------------------------
 
+collect_cloudflare_origin_credentials() {
+    local domain="$1"
+    local cert_file="/etc/caddy/certs/${domain}.crt"
+    local key_file="/etc/caddy/certs/${domain}.key"
+
+    mkdir -p /etc/caddy/certs
+    chmod 700 /etc/caddy/certs
+
+    echo
+    echo "Provide Cloudflare Origin Certificate & Private Key for ${domain}:"
+    echo "  1) Paste PEM content directly in terminal"
+    echo "  2) Specify paths to existing files on this server"
+    echo
+
+    local method_choice
+    read -r -p "Select [1]: " method_choice </dev/tty
+    method_choice="${method_choice:-1}"
+
+    if [[ "$method_choice" == "2" ]]; then
+        while true; do
+            local input_cert
+            input_cert="$(ask_default "Path to Origin Certificate (.crt/.pem)" "")"
+            if [[ -f "$input_cert" ]]; then
+                cp -f "$input_cert" "$cert_file"
+                chmod 644 "$cert_file"
+                break
+            fi
+            warn "File not found: ${input_cert}"
+        done
+
+        while true; do
+            local input_key
+            input_key="$(ask_default "Path to Private Key (.key)" "")"
+            if [[ -f "$input_key" ]]; then
+                cp -f "$input_key" "$key_file"
+                chmod 600 "$key_file"
+                break
+            fi
+            warn "File not found: ${input_key}"
+        done
+    else
+        while true; do
+            echo
+            echo -e "  ${BOLD}Paste Cloudflare Origin Certificate (.pem/.crt):${NC}"
+            echo -e "  ${DIM}(Starts with '-----BEGIN CERTIFICATE-----', automatically ends after '-----END CERTIFICATE-----')${NC}"
+            : > "$cert_file"
+            while IFS= read -r line </dev/tty; do
+                echo "$line" >> "$cert_file"
+                if [[ "$line" == *"END CERTIFICATE"* ]]; then
+                    break
+                fi
+            done
+            chmod 644 "$cert_file"
+
+            if grep -q "BEGIN CERTIFICATE" "$cert_file" && grep -q "END CERTIFICATE" "$cert_file"; then
+                success "Certificate captured."
+                break
+            fi
+            warn "Invalid certificate: missing 'BEGIN CERTIFICATE' or 'END CERTIFICATE' markers. Try again."
+        done
+
+        while true; do
+            echo
+            echo -e "  ${BOLD}Paste Cloudflare Private Key (.key):${NC}"
+            echo -e "  ${DIM}(Starts with '-----BEGIN ... KEY-----', automatically ends after '-----END ... KEY-----')${NC}"
+            : > "$key_file"
+            while IFS= read -r line </dev/tty; do
+                echo "$line" >> "$key_file"
+                if [[ "$line" == *"KEY-----"* ]]; then
+                    break
+                fi
+            done
+            chmod 600 "$key_file"
+
+            if grep -q "BEGIN" "$key_file" && grep -q "KEY" "$key_file"; then
+                success "Private key captured."
+                break
+            fi
+            warn "Invalid private key: missing 'BEGIN' or 'KEY' markers. Try again."
+        done
+    fi
+
+    CADDY_ORIGIN_CERT_PATH="$cert_file"
+    CADDY_ORIGIN_KEY_PATH="$key_file"
+    success "Cloudflare Origin CA certificate and key configured."
+}
+
 collect_bare_openship_credentials() {
     section "OpenShip Control Plane Credentials & Domain"
 
@@ -517,6 +609,9 @@ collect_bare_openship_credentials() {
     OPENSHIP_HOST=""
     OPENSHIP_EDGE_ENABLED="false"
     OPENSHIP_PROXY_MODE="none"
+    CADDY_SSL_MODE="auto"
+    CADDY_ORIGIN_CERT_PATH=""
+    CADDY_ORIGIN_KEY_PATH=""
 
     echo
     echo "OpenShip instance reachability:"
@@ -571,6 +666,44 @@ collect_bare_openship_credentials() {
                     warn "Enter a valid DNS hostname, for example os.example.com."
                 done
                 OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+
+                echo
+                echo "Caddy SSL certificate mode for ${OPENSHIP_HOST}:"
+                echo
+                echo "  1) Automatic Let's Encrypt / ZeroSSL (Standard Caddy auto-TLS)"
+                echo "     Caddy requests and renews certificates via ACME HTTP-01."
+                echo "     Works with Cloudflare if proxy is bypassed or HTTP-01 is allowed."
+                echo
+                echo "  2) Cloudflare Origin CA certificate (Recommended for Cloudflare Full / Full strict)"
+                echo "     Paste your 15-year Origin Certificate from Cloudflare Dashboard."
+                echo "     Immune to ACME challenges, rate limits, and redirect loops."
+                echo
+
+                while true; do
+                    read -r -p "Select SSL mode [1]: " ssl_choice </dev/tty
+                    ssl_choice="${ssl_choice:-1}"
+                    case "$ssl_choice" in
+                        1)
+                            CADDY_SSL_MODE="auto"
+                            success "Caddy SSL: Automatic Let's Encrypt."
+                            echo
+                            echo -e "  ${YELLOW}Notice for Cloudflare users:${NC}"
+                            echo -e "  ${DIM}If ${OPENSHIP_HOST} is on Cloudflare, ensure its DNS record is${NC}"
+                            echo -e "  ${DIM}temporarily set to 'DNS only' (gray cloud) so Let's Encrypt can verify.${NC}"
+                            echo -e "  ${DIM}You can switch back to 'Proxied' + Full (strict) immediately after install.${NC}"
+                            echo
+                            break
+                            ;;
+                        2)
+                            CADDY_SSL_MODE="cloudflare_origin"
+                            collect_cloudflare_origin_credentials "$OPENSHIP_HOST"
+                            break
+                            ;;
+                        *)
+                            echo "Invalid choice."
+                            ;;
+                    esac
+                done
                 break
                 ;;
             4)
@@ -664,6 +797,9 @@ collect_configuration() {
             OPENSHIP_EDGE_ENABLED="${OPENSHIP_EDGE_ENABLED:-false}"
             OPENSHIP_PROXY_MODE="${OPENSHIP_PROXY_MODE:-none}"
             OPENSHIP_NO_HOST_CONTROL="${OPENSHIP_NO_HOST_CONTROL:-false}"
+            CADDY_SSL_MODE="${CADDY_SSL_MODE:-auto}"
+            CADDY_ORIGIN_CERT_PATH="${CADDY_ORIGIN_CERT_PATH:-}"
+            CADDY_ORIGIN_KEY_PATH="${CADDY_ORIGIN_KEY_PATH:-}"
 
             # Auto-infer proxy mode if loading an older state file
             if [[ "$OPENSHIP_PROXY_MODE" == "none" ]]; then
@@ -901,6 +1037,9 @@ OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL:-}
 OPENSHIP_EDGE_ENABLED=${OPENSHIP_EDGE_ENABLED:-false}
 OPENSHIP_PROXY_MODE=${OPENSHIP_PROXY_MODE:-none}
 OPENSHIP_NO_HOST_CONTROL=${OPENSHIP_NO_HOST_CONTROL:-false}
+CADDY_SSL_MODE=${CADDY_SSL_MODE:-auto}
+CADDY_ORIGIN_CERT_PATH=${CADDY_ORIGIN_CERT_PATH:-}
+CADDY_ORIGIN_KEY_PATH=${CADDY_ORIGIN_KEY_PATH:-}
 EOF
 
     chmod 600 "$STATE_FILE"
@@ -1581,11 +1720,23 @@ configure_caddy() {
         success "Caddy is already installed."
     fi
 
+    local tls_directive=""
+    if [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_origin" && -n "${CADDY_ORIGIN_CERT_PATH:-}" && -f "${CADDY_ORIGIN_CERT_PATH:-}" && -n "${CADDY_ORIGIN_KEY_PATH:-}" && -f "${CADDY_ORIGIN_KEY_PATH:-}" ]]; then
+        tls_directive="    tls ${CADDY_ORIGIN_CERT_PATH} ${CADDY_ORIGIN_KEY_PATH}"
+    fi
+
     run_task "Configuring Caddyfile (${OPENSHIP_HOST} -> :3001)" bash -c "
         mkdir -p /etc/caddy
         cat > /etc/caddy/Caddyfile <<EOF
 ${OPENSHIP_HOST} {
-    reverse_proxy 127.0.0.1:3001
+${tls_directive}
+    reverse_proxy 127.0.0.1:3001 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {host}
+    }
 }
 EOF
         systemctl enable caddy
@@ -1643,7 +1794,11 @@ print_summary() {
     local mode_label="${INSTALL_MODE^^}"
     local proxy_label="none"
     if [[ "${OPENSHIP_PROXY_MODE:-none}" == "caddy" ]]; then
-        proxy_label="Caddy (Native HTTPS)"
+        if [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_origin" ]]; then
+            proxy_label="Caddy (Cloudflare Origin CA)"
+        else
+            proxy_label="Caddy (Let's Encrypt HTTPS)"
+        fi
     elif [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
         proxy_label="OpenShip Edge (Docker)"
     fi
@@ -1683,6 +1838,13 @@ print_summary() {
         fi
     else
         success "OpenShip Standard (Docker Compose)"
+    fi
+
+    if [[ "${OPENSHIP_PROXY_MODE:-none}" == "caddy" ]]; then
+        echo
+        echo -e "  ${YELLOW}Cloudflare setup:${NC}"
+        echo -e "  ${DIM}1. In Cloudflare DNS, set ${OPENSHIP_HOST} to 'Proxied' (orange cloud).${NC}"
+        echo -e "  ${DIM}2. Under SSL/TLS, ensure encryption mode is set to 'Full (strict)'.${NC}"
     fi
 
     echo
