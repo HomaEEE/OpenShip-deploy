@@ -42,12 +42,12 @@ The project intentionally keeps infrastructure configuration separate from OpenS
 
 ### Runtime modes
 
-| Mode | Docker | Recommended RAM | Use case |
-|---|---:|---:|---|
-| **Bare** | No | 1–2 GB | Lightweight Control Plane |
-| **Standard** | Yes | 2+ GB | Full Docker-based installation |
+| Mode | OpenShip Runtime | Edge (:80/:443) | Docker | Recommended RAM | Use case |
+|---|---|---|---:|---:|---|
+| **Bare** | Native Process | Yes (container) | Edge only | 1–2 GB | Dedicated Control Plane |
+| **Standard** | Docker Compose | Yes (container) | Full stack | 2+ GB | Full Docker stack |
 
-On a small VPS, Bare mode avoids the additional Docker/Compose stack and uses OpenShip's embedded database/runtime.
+On a 1–2 GB VPS, Bare mode runs OpenShip as a lightweight native service with an embedded database, using Docker solely for the OpenShip Edge container (:80/:443) to route the control plane domain without running Postgres/Redis containers.
 
 ### Installation
 
@@ -187,23 +187,27 @@ It checks, among other things:
 The intended deployment model is:
 
 ```text
-                    ┌─────────────────────────┐
-                    │   OpenShip Control Plane │
-                    │       Bare / Standard    │
-                    └────────────┬────────────┘
-                                 │
-                         manages nodes
-                                 │
-              ┌──────────────────┴──────────────────┐
-              │                                     │
-       Deployment Node 1                     Deployment Node 2
-              │                                     │
-             Edge                                  Edge
-              │                                     │
-        ┌─────┼─────┐                         ┌─────┼─────┐
-        │     │     │                         │     │     │
-       App   App   App                       CRM   Site  Bot
+                    Internet
+                       │
+                   Cloudflare
+                       │
+        ┌──────────────┴──────────────┐
+        │                             │
+  os.example.com                   noire.ee
+        │                             │
+   Control VPS                     Prod VPS
+(Ubuntu 24.04, 1-2GB)        (Ubuntu 24.04, 4-8GB)
+        │                             │
+  OpenShip Edge (:80/:443)      OpenShip Edge (:80/:443)
+        │                             │
+  OpenShip Bare (:3001)         Laravel / CRM
+  (Control Plane daemon)        MariaDB 11.4 / Redis 7.4
+        │
+        └──────── SSH (management) ───→
 ```
+
+> [!IMPORTANT]
+> **Key Architectural Invariant**: The Control VPS is **never in the HTTP request path** for production applications. Production applications (`noire.ee`, `admin.noire.ee`, `api.noire.ee`) connect directly to their respective Production VPS instances. If the Control VPS is powered off, all production applications continue running and serving HTTP traffic without interruption.
 
 The Control Plane should remain dedicated to management. Laravel/Filament applications should be deployed to separate deployment nodes.
 
@@ -368,12 +372,12 @@ Add your preferred project license here.
 
 ### Режимы
 
-| Режим | Docker | RAM | Назначение |
-|---|---:|---:|---|
-| **Bare** | Нет | 1–2 GB | Лёгкий Control Plane |
-| **Standard** | Да | 2+ GB | Docker-based установка |
+| Режим | OpenShip Runtime | Edge (:80/:443) | Docker | RAM | Назначение |
+|---|---|---|---:|---:|---|
+| **Bare** | Нативный сервис | Да (контейнер) | Только Edge | 1–2 GB | Выделенный Control Plane |
+| **Standard** | Docker Compose | Да (контейнер) | Полный стек | 2+ GB | Полная Docker-установка |
 
-Для небольшого VPS рекомендуется Bare: он не создаёт дополнительный Docker/Compose stack и использует штатный лёгкий runtime OpenShip.
+Для VPS с 1–2 GB RAM рекомендуется Bare: он запускает OpenShip как нативный сервис со встроенной базой данных, а Docker используется исключительно для контейнера OpenShip Edge (:80/:443).
 
 ### Установка
 
@@ -457,19 +461,28 @@ sudo ./doctor.sh
 
 ### Архитектура
 
-Control Plane рекомендуется держать отдельно от приложений:
-
 ```text
-OpenShip Control Plane
+                    Internet
+                       │
+                   Cloudflare
+                       │
+        ┌──────────────┴──────────────┐
+        │                             │
+  os.example.com                   noire.ee
+        │                             │
+   Control VPS                     Prod VPS
+(Ubuntu 24.04, 1-2GB)        (Ubuntu 24.04, 4-8GB)
+        │                             │
+  OpenShip Edge (:80/:443)      OpenShip Edge (:80/:443)
+        │                             │
+  OpenShip Bare (:3001)         Laravel / CRM
+  (Control Plane daemon)        MariaDB 11.4 / Redis 7.4
         │
-        ├── Deployment Node 1 (Apps)
-        │       ├── Laravel / Filament
-        │       └── Other web apps
-        │
-        └── Deployment Node 2 (Databases & Cache)
-                ├── MariaDB 11.4 (Docker)
-                └── Redis 7.4 (Docker)
+        └──────── SSH (management) ───→
 ```
+
+> [!IMPORTANT]
+> **Критическое требование**: Control VPS **никогда не находится в HTTP request path production-приложений**. Трафик production-доменов (`noire.ee`, `admin.noire.ee` и т.д.) направляется напрямую на Prod VPS. Если Control VPS выключен, работающие production-приложения продолжают обслуживать пользователей без перебоев.
 
 ### Службы баз данных для Worker-серверов (MariaDB + Redis)
 
@@ -608,12 +621,12 @@ sudo ./backup.sh --cron  # Установить ежедневный запус�
 
 ### Режими встановлення
 
-| Режим | Docker | RAM | Призначення |
-|---|---:|---:|---|
-| **Bare** | Ні | 1–2 GB | Легкий Control Plane |
-| **Standard** | Так | 2+ GB | Повна Docker-інсталяція |
+| Режим | OpenShip Runtime | Edge (:80/:443) | Docker | RAM | Призначення |
+|---|---|---|---:|---:|---|
+| **Bare** | Нативний процес | Так (контейнер) | Тільки Edge | 1–2 GB | Виділений Control Plane |
+| **Standard** | Docker Compose | Так (контейнер) | Повний стек | 2+ GB | Повна Docker-інсталяція |
 
-Для невеликих VPS рекомендується Bare.
+Для VPS із 1–2 GB RAM рекомендується Bare.
 
 ### Встановлення
 
@@ -685,6 +698,31 @@ sudo ./doctor.sh
 ```
 
 Пароль адміністратора OpenShip не зберігається у state-файлі.
+
+### Архітектура
+
+```text
+                    Internet
+                       │
+                   Cloudflare
+                       │
+        ┌──────────────┴──────────────┐
+        │                             │
+  os.example.com                   noire.ee
+        │                             │
+   Control VPS                     Prod VPS
+(Ubuntu 24.04, 1-2GB)        (Ubuntu 24.04, 4-8GB)
+        │                             │
+  OpenShip Edge (:80/:443)      OpenShip Edge (:80/:443)
+        │                             │
+  OpenShip Bare (:3001)         Laravel / CRM
+  (Control Plane daemon)        MariaDB 11.4 / Redis 7.4
+        │
+        └──────── SSH (management) ───→
+```
+
+> [!IMPORTANT]
+> **Критична вимога**: Control VPS **ніколи не знаходиться в HTTP request path production-застосунків**. Трафік production-доменів (`noire.ee`, `admin.noire.ee` тощо) йде безпосередньо на Prod VPS. Якщо Control VPS вимкнено, працюючі production-застосунки продовжують обслуговувати користувачів без перерв.
 
 ---
 

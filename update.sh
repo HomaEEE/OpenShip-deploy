@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 readonly LOG_FILE="/var/log/openship-control-update.log"
+readonly STATE_FILE="/etc/openship-control/install.conf"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -23,6 +24,12 @@ touch "$LOG_FILE"
 chmod 600 "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
+INSTALL_MODE="bare"
+if [[ -f "$STATE_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$STATE_FILE"
+fi
+
 echo
 echo "============================================================"
 echo " OpenShip Control Plane — Update"
@@ -31,7 +38,7 @@ echo
 
 command -v openship >/dev/null 2>&1 || die "OpenShip CLI is not installed."
 
-log "Current version:"
+log "Current OpenShip version:"
 openship --version || true
 
 echo
@@ -46,8 +53,8 @@ if [[ $# -gt 0 ]]; then
 fi
 
 echo
-warn "OpenShip will update the CLI and bundled server."
-warn "The running OpenShip service may be restarted."
+warn "OpenShip will update the CLI and bundled control plane server."
+warn "The running OpenShip service will be restarted."
 echo
 
 read -r -p "Continue? [y/N]: " answer
@@ -59,6 +66,13 @@ esac
 echo
 log "Updating OpenShip..."
 openship update
+
+if [[ "${INSTALL_MODE}" == "bare" ]]; then
+    if systemctl is-active --quiet openship 2>/dev/null; then
+        log "Restarting OpenShip systemd service..."
+        systemctl restart openship
+    fi
+fi
 
 echo
 log "Version after update:"

@@ -8,8 +8,9 @@
 #   Ubuntu 24.04 LTS
 #
 # Installation modes:
-#   BARE      - OpenShip without Docker
-#   STANDARD  - OpenShip using Docker
+#   BARE      - OpenShip Control Plane (lightweight Node process, embedded DB)
+#               Optionally with OpenShip Edge (:80/:443 via Docker)
+#   STANDARD  - Full OpenShip Docker Compose stack
 #
 # The installer automatically detects RAM and recommends the appropriate mode.
 #
@@ -21,7 +22,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="2.1.2"
+readonly SCRIPT_VERSION="2.3.0"
 readonly OPENSHIP_INSTALL_URL="https://get.openship.io"
 
 readonly LOG_FILE="/var/log/openship-control-install.log"
@@ -32,6 +33,7 @@ readonly STATE_FILE="${STATE_DIR}/install.conf"
 # Bare mode is intentionally allowed on small VPS instances.
 # 768 MiB is the hard minimum; 2 GiB is recommended for Standard/Docker.
 readonly MIN_RAM_MB=768
+readonly LOW_RAM_MB=1024
 readonly RECOMMENDED_RAM_MB=2048
 readonly MIN_DISK_GB=10
 
@@ -133,10 +135,10 @@ ask_yes_no() {
     local answer
 
     if [[ "$default" == "Y" ]]; then
-        read -r -p "$prompt [Y/n]: " answer
+        read -r -p "$prompt [Y/n]: " answer </dev/tty
         answer="${answer:-Y}"
     else
-        read -r -p "$prompt [y/N]: " answer
+        read -r -p "$prompt [y/N]: " answer </dev/tty
         answer="${answer:-N}"
     fi
 
@@ -155,7 +157,7 @@ ask_default() {
     local default="$2"
     local value
 
-    read -r -p "$prompt [$default]: " value
+    read -r -p "$prompt [$default]: " value </dev/tty
 
     echo "${value:-$default}"
 }
@@ -243,32 +245,26 @@ check_resources() {
 
     detect_resources
 
-    echo "RAM:     ${RAM_MB} MB"
-    echo "Minimum: ${MIN_RAM_MB} MB (Bare)"
-    echo "Recommended: ${RECOMMENDED_RAM_MB} MB (Standard)"
-    echo "CPU:     ${CPU_COUNT}"
-    echo "Disk:    ${DISK_GB} GB"
+    echo "RAM:         ${RAM_MB} MB"
+    echo "Minimum:     ${MIN_RAM_MB} MB (Bare Control Plane)"
+    echo "Recommended: ${RECOMMENDED_RAM_MB} MB (Standard Docker Stack)"
+    echo "CPU cores:   ${CPU_COUNT}"
+    echo "Disk:        ${DISK_GB} GB free"
     echo
 
     if (( RAM_MB < MIN_RAM_MB )); then
-        die "At least 768 MiB RAM is required for Bare mode."
+        die "At least ${MIN_RAM_MB} MiB RAM is required. Detected: ${RAM_MB} MB."
+    elif (( RAM_MB < LOW_RAM_MB )); then
+        warn "Low-memory VPS detected: ${RAM_MB} MB RAM (supported with warning)."
+        warn "Bare mode is required. Standard Docker mode is not recommended."
     elif (( RAM_MB < RECOMMENDED_RAM_MB )); then
-        warn "Low-memory VPS detected: ${RAM_MB} MB RAM."
-        warn "Bare mode is recommended for this server."
-        warn "Standard/Docker mode may be unstable or use swap heavily."
+        success "RAM: ${RAM_MB} MB (supported for Bare Control Plane)."
     else
-        success "RAM is sufficient for Standard mode."
+        success "RAM is sufficient for Standard mode (${RAM_MB} MB)."
     fi
 
     if (( DISK_GB < MIN_DISK_GB )); then
         die "At least ${MIN_DISK_GB} GB free disk space is required."
-    fi
-
-    if (( RAM_MB < RECOMMENDED_RAM_MB )); then
-        warn "RAM is below the recommended 2 GB."
-        warn "This server is suitable for a lightweight Bare installation."
-    else
-        success "RAM is sufficient for Standard mode."
     fi
 
     success "Resource check passed."
@@ -282,7 +278,6 @@ select_installation_mode() {
     section "OpenShip installation mode"
 
     echo "Detected resources:"
-    echo
     echo "  RAM:  ${RAM_MB} MB"
     echo "  CPU:  ${CPU_COUNT}"
     echo "  Disk: ${DISK_GB} GB"
@@ -291,41 +286,29 @@ select_installation_mode() {
     if (( RAM_MB < RECOMMENDED_RAM_MB )); then
 
         echo -e "${BOLD}${YELLOW}"
-        echo "WARNING"
+        echo "RECOMMENDATION FOR LOW-MEMORY VPS (< 2 GB RAM)"
         echo "----------------------------------------------------------------"
-        echo "This server has less than 2 GB of RAM."
-        echo
-        echo "Standard Docker mode will run:"
-        echo "  - Docker"
-        echo "  - PostgreSQL"
-        echo "  - Redis"
-        echo "  - OpenShip API"
-        echo "  - OpenShip Dashboard"
-        echo "  - OpenShip Edge"
-        echo
-        echo "On a 1 GB VPS this can create significant memory pressure."
-        echo
-        echo "For 1–2 GB VPS servers, Bare mode is recommended."
-        echo
-        echo "Hard minimum for Bare mode: 768 MiB RAM."
+        echo "This server will act as an OpenShip Control Plane."
+        echo "Bare mode runs OpenShip as a lightweight native service with"
+        echo "an embedded database (avoiding Postgres & Redis containers)."
+        echo "OpenShip Edge (:80/:443) will be used to route control plane traffic."
         echo -e "${NC}"
 
-        echo
         echo "Choose installation mode:"
         echo
-        echo "  1) Bare"
-        echo "     OpenShip without Docker."
-        echo "     Recommended for this server."
+        echo "  1) Bare (Recommended)"
+        echo "     Lightweight Control Plane (Node process + embedded DB)."
+        echo "     Optionally with Edge on :80/:443."
         echo
         echo "  2) Standard"
-        echo "     OpenShip using Docker."
+        echo "     Full OpenShip Docker Compose stack (Postgres + Redis)."
         echo "     Requires more RAM."
         echo
         echo "  3) Cancel"
         echo
 
         while true; do
-            read -r -p "Select [1]: " choice
+            read -r -p "Select [1]: " choice </dev/tty
             choice="${choice:-1}"
 
             case "$choice" in
@@ -358,17 +341,17 @@ select_installation_mode() {
         echo "Choose installation mode:"
         echo
         echo "  1) Standard"
-        echo "     OpenShip using Docker."
-        echo "     Recommended."
+        echo "     Full OpenShip Docker Compose stack."
+        echo "     Recommended for 2+ GB RAM."
         echo
         echo "  2) Bare"
-        echo "     OpenShip without Docker."
+        echo "     Lightweight Control Plane (Node process + embedded DB)."
         echo
         echo "  3) Cancel"
         echo
 
         while true; do
-            read -r -p "Select [1]: " choice
+            read -r -p "Select [1]: " choice </dev/tty
             choice="${choice:-1}"
 
             case "$choice" in
@@ -394,11 +377,11 @@ select_installation_mode() {
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        success "Selected mode: BARE"
-        warn "Docker will NOT be installed."
+        success "Selected mode: BARE Control Plane"
+        log "OpenShip daemon will run as a native service with embedded database."
     else
-        success "Selected mode: STANDARD"
-        log "OpenShip will run using Docker."
+        success "Selected mode: STANDARD Docker Stack"
+        log "OpenShip will run using Docker Compose."
     fi
 }
 
@@ -406,13 +389,107 @@ select_installation_mode() {
 # Configuration
 # ------------------------------------------------------------------------------
 
+collect_bare_openship_credentials() {
+    section "OpenShip Control Plane Credentials & Domain"
+
+    echo "Configure administrator credentials and reachability for OpenShip:"
+    echo
+
+    OPENSHIP_ADMIN_NAME_INPUT="$(ask_default "OpenShip administrator name" "$ADMIN_USER_INPUT")"
+
+    while true; do
+        OPENSHIP_ADMIN_EMAIL_INPUT="$(ask_default "OpenShip administrator email" "")"
+        if [[ "$OPENSHIP_ADMIN_EMAIL_INPUT" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+            break
+        fi
+        warn "Enter a valid email address."
+    done
+
+    while true; do
+        read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
+        echo
+        read -r -s -p "Repeat OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_CONFIRM </dev/tty
+        echo
+
+        if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
+            warn "Password cannot be empty."
+            continue
+        fi
+
+        if (( ${#OPENSHIP_ADMIN_PASSWORD_INPUT} < 8 )); then
+            warn "Password must contain at least 8 characters."
+            continue
+        fi
+
+        if [[ "$OPENSHIP_ADMIN_PASSWORD_INPUT" != "$OPENSHIP_ADMIN_PASSWORD_CONFIRM" ]]; then
+            warn "Passwords do not match."
+            continue
+        fi
+
+        break
+    done
+
+    unset OPENSHIP_ADMIN_PASSWORD_CONFIRM
+
+    OPENSHIP_DOMAIN_KIND="none"
+    OPENSHIP_PUBLIC_URL=""
+    OPENSHIP_HOST=""
+    OPENSHIP_EDGE_ENABLED="false"
+
+    echo
+    echo "OpenShip instance reachability:"
+    echo
+    echo "  1) Public HTTPS domain (Recommended)"
+    echo "     Use OpenShip Edge (:80/:443) to route your domain (e.g. os.example.com)"
+    echo "     directly to the OpenShip dashboard."
+    echo
+    echo "  2) Local / private"
+    echo "     Dashboard stays on internal port 3001 without public ingress."
+    echo "     Cloudflare Tunnel or custom VPN can be configured later."
+    echo
+    echo "  3) Cancel"
+    echo
+
+    while true; do
+        read -r -p "Select [1]: " reachability </dev/tty
+        reachability="${reachability:-1}"
+        case "$reachability" in
+            1)
+                OPENSHIP_DOMAIN_KIND="custom"
+                OPENSHIP_EDGE_ENABLED="true"
+                while true; do
+                    OPENSHIP_HOST="$(ask_default "OpenShip domain (e.g. os.example.com)" "")"
+                    if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+                        break
+                    fi
+                    warn "Enter a valid DNS hostname, for example os.example.com."
+                done
+                OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+                break
+                ;;
+            2)
+                OPENSHIP_DOMAIN_KIND="none"
+                OPENSHIP_EDGE_ENABLED="false"
+                break
+                ;;
+            3)
+                die "Installation cancelled."
+                ;;
+            *)
+                echo "Invalid choice."
+                ;;
+        esac
+    done
+
+    echo
+    success "OpenShip Control Plane parameters collected."
+}
+
 collect_configuration() {
-    section "Control Plane configuration"
+    section "Control Plane host configuration"
 
     echo "This VPS will act as the OpenShip Control Plane."
-    echo
-    echo "It will manage remote deployment servers."
-    echo "Laravel / Filament applications should NOT be deployed here."
+    echo "Production applications (Laravel/CRM) should NOT be deployed here."
     echo
 
     while true; do
@@ -432,9 +509,7 @@ collect_configuration() {
     if ! timedatectl list-timezones 2>/dev/null |
         grep -Fxq "$TIMEZONE_INPUT"; then
 
-        warn "Timezone '${TIMEZONE_INPUT}' not found."
-        warn "Using UTC."
-
+        warn "Timezone '${TIMEZONE_INPUT}' not found. Using UTC."
         TIMEZONE_INPUT="UTC"
     fi
 
@@ -468,10 +543,26 @@ collect_configuration() {
         ENABLE_FAIL2BAN="false"
     fi
 
-    if ask_yes_no "Ensure 2 GB swap?" "Y"; then
+    local rec_swap=2
+    if (( RAM_MB > 2048 )); then
+        rec_swap=4
+    fi
+
+    echo
+    echo "SWAP configuration:"
+    echo "  Recommended swap for ${RAM_MB} MB RAM: ${rec_swap} GB"
+    echo
+
+    if ask_yes_no "Configure ${rec_swap} GB swap?" "Y"; then
         ENABLE_SWAP="true"
+        SWAP_SIZE_GB="$rec_swap"
     else
         ENABLE_SWAP="false"
+        SWAP_SIZE_GB=0
+    fi
+
+    if [[ "$INSTALL_MODE" == "bare" ]]; then
+        collect_bare_openship_credentials
     fi
 
     save_configuration
@@ -483,6 +574,8 @@ save_configuration() {
 
     cat > "$STATE_FILE" <<EOF
 INSTALL_MODE=${INSTALL_MODE}
+OPENSHIP_ROLE=control
+OPENSHIP_HOST_CONTROL=false
 HOSTNAME=${HOSTNAME_INPUT}
 TIMEZONE=${TIMEZONE_INPUT}
 SSH_PORT=${SSH_PORT_INPUT}
@@ -490,17 +583,20 @@ ADMIN_USER=${ADMIN_USER_INPUT}
 ENABLE_UFW=${ENABLE_UFW}
 ENABLE_FAIL2BAN=${ENABLE_FAIL2BAN}
 ENABLE_SWAP=${ENABLE_SWAP}
+SWAP_SIZE_GB=${SWAP_SIZE_GB:-2}
 OPENSHIP_ADMIN_NAME=${OPENSHIP_ADMIN_NAME_INPUT:-}
 OPENSHIP_ADMIN_EMAIL=${OPENSHIP_ADMIN_EMAIL_INPUT:-}
-OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-}
+OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-none}
 OPENSHIP_HOST=${OPENSHIP_HOST:-}
+OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL:-}
+OPENSHIP_EDGE_ENABLED=${OPENSHIP_EDGE_ENABLED:-false}
 EOF
 
     chmod 600 "$STATE_FILE"
 }
 
 # ------------------------------------------------------------------------------
-# Hostname
+# Hostname & Timezone
 # ------------------------------------------------------------------------------
 
 configure_hostname() {
@@ -518,10 +614,6 @@ configure_hostname() {
 
     success "Hostname: ${HOSTNAME_INPUT}"
 }
-
-# ------------------------------------------------------------------------------
-# Timezone
-# ------------------------------------------------------------------------------
 
 configure_timezone() {
     section "Timezone"
@@ -550,7 +642,7 @@ install_base_packages() {
         jq \
         unzip \
         rsync \
-        htop \
+        btop \
         nano \
         vim \
         ncdu \
@@ -561,11 +653,68 @@ install_base_packages() {
         openssl \
         ufw \
         fail2ban \
-        unattended-upgrades
+        unattended-upgrades \
+        systemd-timesyncd
 
     apt-get autoremove -y
 
-    success "Base packages installed."
+    success "Base packages installed (including btop & systemd-timesyncd)."
+}
+
+# ------------------------------------------------------------------------------
+# System update
+# ------------------------------------------------------------------------------
+
+update_system() {
+    section "System update"
+
+    log "Updating package lists..."
+    apt-get update
+
+    log "Upgrading system packages..."
+    DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold"
+
+    apt-get autoremove -y
+    apt-get clean
+
+    if [[ -f /var/run/reboot-required ]]; then
+        warn "A system restart is recommended after kernel/library updates."
+        warn "You can complete the OpenShip installation now and reboot afterward."
+    fi
+
+    success "System packages updated."
+}
+
+# ------------------------------------------------------------------------------
+# System tuning
+# ------------------------------------------------------------------------------
+
+optimize_system() {
+    section "System tuning"
+
+    log "Enabling systemd-timesyncd time synchronization..."
+    systemctl enable --now systemd-timesyncd 2>/dev/null || true
+
+    log "Configuring file descriptor limits (nofile 65535)..."
+    cat > /etc/security/limits.d/99-openship.conf <<'EOF'
+* soft nofile 65535
+* hard nofile 65535
+root soft nofile 65535
+root hard nofile 65535
+EOF
+
+    log "Configuring systemd journal limit (SystemMaxUse=200M)..."
+    mkdir -p /etc/systemd/journald.conf.d
+    cat > /etc/systemd/journald.conf.d/99-openship.conf <<'EOF'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=100M
+EOF
+    systemctl restart systemd-journald 2>/dev/null || true
+
+    success "System tuning applied."
 }
 
 # ------------------------------------------------------------------------------
@@ -576,20 +725,24 @@ configure_swap() {
     section "Swap"
 
     if swapon --show | grep -q .; then
-        success "Swap is already enabled."
+        success "Swap is already active:"
         swapon --show
         return
     fi
 
-    if [[ "$ENABLE_SWAP" != "true" ]]; then
+    if [[ "$ENABLE_SWAP" != "true" || "${SWAP_SIZE_GB:-0}" -le 0 ]]; then
         warn "Swap disabled by configuration."
         return
     fi
 
-    log "Creating 2 GB swap..."
+    local swap_gb="${SWAP_SIZE_GB:-2}"
+    log "Creating ${swap_gb} GB swapfile..."
 
     if [[ ! -f /swapfile ]]; then
-        fallocate -l 2G /swapfile
+        if ! fallocate -l "${swap_gb}G" /swapfile 2>/dev/null; then
+            warn "fallocate failed, creating swapfile with dd..."
+            dd if=/dev/zero of=/swapfile bs=1M count="$((swap_gb * 1024))" status=progress
+        fi
         chmod 600 /swapfile
         mkswap /swapfile
     fi
@@ -607,11 +760,11 @@ EOF
 
     sysctl --system >/dev/null
 
-    success "2 GB swap configured."
+    success "${swap_gb} GB swap configured and enabled."
 }
 
 # ------------------------------------------------------------------------------
-# Admin user
+# Administrator user
 # ------------------------------------------------------------------------------
 
 configure_admin_user() {
@@ -716,7 +869,7 @@ configure_ufw() {
     ufw allow "${SSH_PORT_INPUT}/tcp" \
         comment "SSH"
 
-    # OpenShip Edge
+    # OpenShip Edge (:80/:443)
     ufw allow 80/tcp \
         comment "OpenShip HTTP"
 
@@ -724,7 +877,8 @@ configure_ufw() {
         comment "OpenShip HTTPS"
 
     # IMPORTANT:
-    # Dashboard :3001 and API :4000 are intentionally NOT exposed.
+    # Dashboard :3001 and API :4000 are intentionally NOT exposed externally.
+    # OpenShip Edge proxies directly to localhost:3001.
 
     ufw --force enable
 
@@ -778,23 +932,25 @@ configure_unattended_upgrades() {
 # ------------------------------------------------------------------------------
 
 install_docker() {
-    if [[ "$INSTALL_MODE" != "standard" ]]; then
-        section "Docker"
+    section "Docker Engine"
 
-        log "Bare mode selected."
+    if [[ "$INSTALL_MODE" == "bare" && "${OPENSHIP_EDGE_ENABLED:-false}" != "true" ]]; then
+        log "Private Bare mode selected without OpenShip Edge."
         log "Docker installation skipped."
-
         return
     fi
 
-    section "Docker"
+    if [[ "$INSTALL_MODE" == "bare" ]]; then
+        log "OpenShip Edge (:80/:443) container requires Docker Engine."
+        log "Docker will run solely the openship-edge container (no production apps)."
+    fi
 
     if command_exists docker; then
-        success "Docker already installed."
-        docker --version
+        success "Docker already installed: $(docker --version)"
         return
     fi
 
+    log "Installing official Docker Engine..."
     install -m 0755 -d /etc/apt/keyrings
 
     curl -fsSL \
@@ -824,7 +980,7 @@ EOF
     docker --version
     docker compose version
 
-    success "Docker installed."
+    success "Docker Engine installed."
 }
 
 # ------------------------------------------------------------------------------
@@ -832,7 +988,7 @@ EOF
 # ------------------------------------------------------------------------------
 
 configure_docker() {
-    if [[ "$INSTALL_MODE" != "standard" ]]; then
+    if ! command_exists docker; then
         return
     fi
 
@@ -866,13 +1022,12 @@ prepare_runtime_for_openship() {
     section "OpenShip runtime"
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        # OpenShip has an explicit --bare mode. It forces the lightweight
-        # process service even if Docker exists on the host.
         if command_exists docker; then
-            warn "Docker is installed on the host, but OpenShip will NOT use it."
+            log "Docker is available for the OpenShip Edge container (:80/:443)."
+            log "OpenShip Control Plane will run as a lightweight Bare process."
         fi
 
-        success "Bare runtime selected: OpenShip will be started with --bare."
+        success "Bare runtime selected: OpenShip will start with --bare --no-host-control."
         return
     fi
 
@@ -890,8 +1045,7 @@ install_openship_cli() {
     section "OpenShip CLI"
 
     if command_exists openship; then
-        success "OpenShip CLI already installed."
-        openship --version || true
+        success "OpenShip CLI already installed: $(openship --version || true)"
         return
     fi
 
@@ -899,7 +1053,6 @@ install_openship_cli() {
 
     curl -fsSL "$OPENSHIP_INSTALL_URL" | sh
 
-    # The official installer installs the CLI under ~/.openship/bin.
     export PATH="/root/.openship/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
 
     if ! command_exists openship && [[ -x "/root/.openship/bin/openship" ]]; then
@@ -927,26 +1080,11 @@ preflight_openship() {
         die "OpenShip CLI is not available."
 
     if [[ "$INSTALL_MODE" == "standard" ]]; then
-
         command_exists docker ||
             die "Docker is required for Standard mode."
 
         docker info >/dev/null ||
             die "Docker daemon is not running."
-
-    fi
-
-    if ss -lntp 2>/dev/null |
-        grep -Eq ':(80|443)[[:space:]]'; then
-
-        warn "Port 80 or 443 is already in use."
-
-        ss -lntp 2>/dev/null |
-            grep -E ':(80|443)[[:space:]]' || true
-
-        if ! ask_yes_no "Continue anyway?" "N"; then
-            die "Installation cancelled."
-        fi
     fi
 
     success "Pre-flight checks passed."
@@ -956,108 +1094,25 @@ preflight_openship() {
 # OpenShip setup
 # ------------------------------------------------------------------------------
 
-collect_bare_openship_credentials() {
-    section "OpenShip Bare configuration"
-
-    echo "Bare mode uses the supported headless OpenShip flow:"
-    echo "  openship up --bare --non-interactive"
-    echo
-    echo "The server will use OpenShip\x27s embedded database and will not"
-    echo "create the OpenShip Docker/Compose stack."
-    echo
-
-    OPENSHIP_ADMIN_NAME_INPUT="$(ask_default "OpenShip administrator name" "$ADMIN_USER_INPUT")"
-
-    while true; do
-        OPENSHIP_ADMIN_EMAIL_INPUT="$(ask_default "OpenShip administrator email" "")"
-        if [[ "$OPENSHIP_ADMIN_EMAIL_INPUT" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
-            break
-        fi
-        warn "Enter a valid email address."
-    done
-
-    while true; do
-        read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
-        echo
-        read -r -s -p "Repeat OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_CONFIRM </dev/tty
-        echo
-
-        if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
-            warn "Password cannot be empty."
-            continue
-        fi
-
-        if (( ${#OPENSHIP_ADMIN_PASSWORD_INPUT} < 8 )); then
-            warn "Password must contain at least 8 characters."
-            continue
-        fi
-
-        if [[ "$OPENSHIP_ADMIN_PASSWORD_INPUT" != "$OPENSHIP_ADMIN_PASSWORD_CONFIRM" ]]; then
-            warn "Passwords do not match."
-            continue
-        fi
-
-        break
-    done
-
-    unset OPENSHIP_ADMIN_PASSWORD_CONFIRM
-
-    OPENSHIP_DOMAIN_KIND="none"
-    OPENSHIP_PUBLIC_URL=""
-    OPENSHIP_HOST=""
-
-    echo
-    echo "OpenShip instance reachability:"
-    echo
-    echo "  1) This machine only"
-    echo "     Dashboard stays local to the VPS. A Cloudflare Tunnel or reverse proxy"
-    echo "     can expose it later without changing the Bare runtime."
-    echo
-    echo "  2) Custom domain"
-    echo "     Configure a public hostname during the Bare installation."
-    echo
-    echo "  3) Cancel"
-    echo
-
-    while true; do
-        read -r -p "Select [1]: " reachability </dev/tty
-        reachability="${reachability:-1}"
-        case "$reachability" in
-            1)
-                OPENSHIP_DOMAIN_KIND="none"
-                break
-                ;;
-            2)
-                OPENSHIP_DOMAIN_KIND="custom"
-                while true; do
-                    OPENSHIP_HOST="$(ask_default "OpenShip domain" "")"
-                    if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
-                        break
-                    fi
-                    warn "Enter a valid DNS hostname, for example ops.example.com."
-                done
-                OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
-                break
-                ;;
-            3)
-                die "Installation cancelled."
-                ;;
-            *)
-                echo "Invalid choice."
-                ;;
-        esac
-    done
-
-    echo
-    success "Bare OpenShip configuration collected."
-}
-
 run_bare_openship_setup() {
-    collect_bare_openship_credentials
+    echo
+    echo "Preparing OpenShip Bare service..."
+    echo
 
-    echo
-    echo "Starting OpenShip Bare service..."
-    echo
+    # Stop any existing or orphaned OpenShip instances and free ports
+    if systemctl is-active --quiet openship 2>/dev/null; then
+        log "Stopping active OpenShip systemd service..."
+        systemctl stop openship 2>/dev/null || true
+    fi
+    if command_exists openship; then
+        openship stop 2>/dev/null || true
+    fi
+
+    # Kill any processes locking the default and fallback OpenShip ports
+    fuser -k 4000/tcp 3001/tcp 4001/tcp 3002/tcp 2>/dev/null || true
+
+    # Reset stored ports cache so OpenShip always binds standard 4000/3001
+    rm -f /root/.openship/ports.json
 
     export OPENSHIP_ADMIN_PASSWORD="$OPENSHIP_ADMIN_PASSWORD_INPUT"
 
@@ -1066,33 +1121,41 @@ run_bare_openship_setup() {
         up
         --bare
         --non-interactive
+        --no-host-control
         --admin-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
         --admin-name "$OPENSHIP_ADMIN_NAME_INPUT"
         --domain-kind "$OPENSHIP_DOMAIN_KIND"
     )
 
     if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        args+=(--hostname "$OPENSHIP_HOST" --public-url "$OPENSHIP_PUBLIC_URL")
+        args+=(
+            --hostname "$OPENSHIP_HOST"
+            --public-url "$OPENSHIP_PUBLIC_URL"
+            --edge takeover
+        )
     fi
+
+    log "Starting OpenShip Bare service with arguments:"
+    echo "  openship ${args[*]}"
+    echo
 
     openship "${args[@]}"
 
     unset OPENSHIP_ADMIN_PASSWORD
     unset OPENSHIP_ADMIN_PASSWORD_INPUT
 
-    success "OpenShip Bare service started and admin account created."
+    success "OpenShip Bare setup completed."
 }
 
 run_openship_setup() {
     section "OpenShip first-run setup"
 
-    echo
     echo -e "${BOLD}Selected mode: ${INSTALL_MODE^^}${NC}"
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        echo "OpenShip will use the explicit --bare runtime mode."
-        echo "The Docker-detecting guided wizard will NOT be used."
+        echo "OpenShip will use the explicit --bare runtime mode with --no-host-control."
+        echo "The interactive guided wizard will NOT be used."
         echo
         run_bare_openship_setup
         return
@@ -1100,15 +1163,6 @@ run_openship_setup() {
 
     echo "OpenShip will be started using Docker Compose."
     echo
-    echo "The official OpenShip setup will ask for:"
-    echo
-    echo "  - Administrator name"
-    echo "  - Administrator email"
-    echo "  - Administrator password"
-    echo "  - Instance visibility"
-    echo "  - Domain / HTTPS configuration"
-    echo
-
     echo -e "${YELLOW}Do not close this terminal during setup.${NC}"
     echo
 
@@ -1123,6 +1177,7 @@ run_openship_setup() {
 
     openship </dev/tty >/dev/tty 2>/dev/tty
 }
+
 # ------------------------------------------------------------------------------
 # Post-install
 # ------------------------------------------------------------------------------
@@ -1135,8 +1190,7 @@ post_install_checks() {
     openship status || true
 
     echo
-
-    if [[ "$INSTALL_MODE" == "standard" ]]; then
+    if command_exists docker; then
         log "Docker containers:"
         docker ps --format \
             'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
@@ -1197,7 +1251,7 @@ print_summary() {
     echo "  SSH: ${ENABLE_FAIL2BAN}"
     echo
     echo "Swap:"
-    echo "  2 GB: ${ENABLE_SWAP}"
+    echo "  ${SWAP_SIZE_GB:-2} GB: ${ENABLE_SWAP}"
     echo
     echo "Installer state:"
     echo "  ${STATE_FILE}"
@@ -1207,17 +1261,19 @@ print_summary() {
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        echo -e "${GREEN}OpenShip is configured in BARE mode.${NC}"
+        echo -e "${GREEN}OpenShip is configured in BARE mode with --no-host-control.${NC}"
+        if [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
+            echo -e "OpenShip Edge (:80/:443) routes: ${BOLD}${OPENSHIP_PUBLIC_URL}${NC}"
+        fi
     else
         echo -e "${GREEN}OpenShip is configured in STANDARD Docker mode.${NC}"
     fi
 
     echo
-    echo "Next step:"
-    echo "  Add the first deployment server from OpenShip."
-    echo
-    echo "This VPS should remain a Control Plane."
-    echo "Do not deploy Laravel/Filament applications here."
+    echo -e "${BOLD}${CYAN}Architecture Notice:${NC}"
+    echo "  This VPS is strictly a Control Plane. Remote deployment servers"
+    echo "  (e.g. for Laravel/CRM) must be added via 'openship server add'."
+    echo "  This server is NEVER in the HTTP path of production applications."
     echo
 }
 
@@ -1255,6 +1311,8 @@ main() {
     configure_timezone
 
     install_base_packages
+    update_system
+    optimize_system
 
     configure_swap
     configure_admin_user
