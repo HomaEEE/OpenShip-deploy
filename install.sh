@@ -408,8 +408,6 @@ collect_bare_openship_credentials() {
     while true; do
         read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
         echo
-        read -r -s -p "Repeat OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_CONFIRM </dev/tty
-        echo
 
         if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
             warn "Password cannot be empty."
@@ -417,19 +415,13 @@ collect_bare_openship_credentials() {
         fi
 
         if (( ${#OPENSHIP_ADMIN_PASSWORD_INPUT} < 8 )); then
-            warn "Password must contain at least 8 characters."
+            warn "Password must contain at least 8 characters (entered: ${#OPENSHIP_ADMIN_PASSWORD_INPUT})."
             continue
         fi
 
-        if [[ "$OPENSHIP_ADMIN_PASSWORD_INPUT" != "$OPENSHIP_ADMIN_PASSWORD_CONFIRM" ]]; then
-            warn "Passwords do not match."
-            continue
-        fi
-
+        success "Password accepted (${#OPENSHIP_ADMIN_PASSWORD_INPUT} characters)."
         break
     done
-
-    unset OPENSHIP_ADMIN_PASSWORD_CONFIRM
 
     OPENSHIP_DOMAIN_KIND="none"
     OPENSHIP_PUBLIC_URL=""
@@ -582,25 +574,18 @@ collect_configuration() {
                 while true; do
                     read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
                     echo
-                    read -r -s -p "Repeat password: " OPENSHIP_ADMIN_PASSWORD_CONFIRM </dev/tty
-                    echo
 
                     if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
                         warn "Password cannot be empty."
                         continue
                     fi
                     if (( ${#OPENSHIP_ADMIN_PASSWORD_INPUT} < 8 )); then
-                        warn "Password must be at least 8 characters."
+                        warn "Password must be at least 8 characters (entered: ${#OPENSHIP_ADMIN_PASSWORD_INPUT})."
                         continue
                     fi
-                    if [[ "$OPENSHIP_ADMIN_PASSWORD_INPUT" != "$OPENSHIP_ADMIN_PASSWORD_CONFIRM" ]]; then
-                        warn "Passwords do not match."
-                        continue
-                    fi
+                    success "Password accepted (${#OPENSHIP_ADMIN_PASSWORD_INPUT} characters)."
                     break
                 done
-
-                unset OPENSHIP_ADMIN_PASSWORD_CONFIRM
             fi
 
             success "Configuration loaded from state file."
