@@ -21,7 +21,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="2.2.0"
+readonly SCRIPT_VERSION="2.3.0"
 readonly OPENSHIP_INSTALL_URL="https://get.openship.io"
 
 readonly LOG_FILE="/var/log/openship-control-install.log"
@@ -29,11 +29,15 @@ readonly STATE_DIR="/etc/openship-control"
 readonly STATE_FILE="${STATE_DIR}/install.conf"
 
 # Resource thresholds
-# Bare mode is intentionally allowed on small VPS instances.
+# Bare mode is intentionally allowed on small VPS instances (<= 1 GB RAM).
 # 768 MiB is the hard minimum; 2 GiB is recommended for Standard/Docker.
 readonly MIN_RAM_MB=768
+readonly LOW_RAM_MB=1024
 readonly RECOMMENDED_RAM_MB=2048
 readonly MIN_DISK_GB=10
+
+REBOOT_REQUIRED="false"
+SWAP_SIZE_GB=0
 
 # ------------------------------------------------------------------------------
 # Colors
@@ -243,32 +247,30 @@ check_resources() {
 
     detect_resources
 
-    echo "RAM:     ${RAM_MB} MB"
-    echo "Minimum: ${MIN_RAM_MB} MB (Bare)"
-    echo "Recommended: ${RECOMMENDED_RAM_MB} MB (Standard)"
-    echo "CPU:     ${CPU_COUNT}"
-    echo "Disk:    ${DISK_GB} GB"
+    echo "RAM:         ${RAM_MB} MB"
+    echo "Minimum:     ${MIN_RAM_MB} MB (Bare)"
+    echo "Recommended: ${RECOMMENDED_RAM_MB} MB (Standard/Docker)"
+    echo "CPU:         ${CPU_COUNT} cores"
+    echo "Disk:        ${DISK_GB} GB free"
     echo
 
     if (( RAM_MB < MIN_RAM_MB )); then
-        die "At least 768 MiB RAM is required for Bare mode."
-    elif (( RAM_MB < RECOMMENDED_RAM_MB )); then
-        warn "Low-memory VPS detected: ${RAM_MB} MB RAM."
-        warn "Bare mode is recommended for this server."
-        warn "Standard/Docker mode may be unstable or use swap heavily."
-    else
-        success "RAM is sufficient for Standard mode."
+        die "At least ${MIN_RAM_MB} MiB RAM is required for Bare mode."
     fi
 
     if (( DISK_GB < MIN_DISK_GB )); then
         die "At least ${MIN_DISK_GB} GB free disk space is required."
     fi
 
-    if (( RAM_MB < RECOMMENDED_RAM_MB )); then
-        warn "RAM is below the recommended 2 GB."
-        warn "This server is suitable for a lightweight Bare installation."
+    if (( RAM_MB <= LOW_RAM_MB )); then
+        warn "Low-memory VPS detected: ${RAM_MB} MB RAM (<= 1 GB)."
+        warn "Bare mode is strongly recommended for this server."
+        warn "Standard Docker mode will likely cause heavy swap and memory pressure."
+    elif (( RAM_MB < RECOMMENDED_RAM_MB )); then
+        warn "RAM is below the recommended 2 GB: ${RAM_MB} MB RAM."
+        warn "Bare mode is recommended. Standard Docker mode requires active swap."
     else
-        success "RAM is sufficient for Standard mode."
+        success "RAM is sufficient for Standard/Docker mode (${RAM_MB} MB)."
     fi
 
     success "Resource check passed."
@@ -284,8 +286,8 @@ select_installation_mode() {
     echo "Detected resources:"
     echo
     echo "  RAM:  ${RAM_MB} MB"
-    echo "  CPU:  ${CPU_COUNT}"
-    echo "  Disk: ${DISK_GB} GB"
+    echo "  CPU:  ${CPU_COUNT} cores"
+    echo "  Disk: ${DISK_GB} GB free"
     echo
 
     if (( RAM_MB < RECOMMENDED_RAM_MB )); then
@@ -293,21 +295,21 @@ select_installation_mode() {
         echo -e "${BOLD}${YELLOW}"
         echo "WARNING"
         echo "----------------------------------------------------------------"
-        echo "This server has less than 2 GB of RAM."
+        if (( RAM_MB <= LOW_RAM_MB )); then
+            echo "This server has ${RAM_MB} MB RAM (<= 1 GB)."
+        else
+            echo "This server has ${RAM_MB} MB RAM (< 2 GB)."
+        fi
         echo
         echo "Standard Docker mode will run:"
-        echo "  - Docker"
+        echo "  - Docker engine & Compose"
         echo "  - PostgreSQL"
         echo "  - Redis"
-        echo "  - OpenShip API"
-        echo "  - OpenShip Dashboard"
-        echo "  - OpenShip Edge"
+        echo "  - OpenShip API, Dashboard & Edge"
         echo
-        echo "On a 1 GB VPS this can create significant memory pressure."
-        echo
-        echo "For 1–2 GB VPS servers, Bare mode is recommended."
-        echo
-        echo "Hard minimum for Bare mode: 768 MiB RAM."
+        echo "On a VPS with < 2 GB RAM this creates significant memory pressure."
+        echo "Bare mode is recommended for this server."
+        echo "Hard minimum for Bare mode: ${MIN_RAM_MB} MiB RAM."
         echo -e "${NC}"
 
         echo
@@ -319,7 +321,7 @@ select_installation_mode() {
         echo
         echo "  2) Standard"
         echo "     OpenShip using Docker."
-        echo "     Requires more RAM."
+        echo "     Requires more RAM (or active SWAP)."
         echo
         echo "  3) Cancel"
         echo
@@ -335,8 +337,8 @@ select_installation_mode() {
                     ;;
                 2)
                     echo
-                    warn "You selected Standard Docker mode on a low-memory VPS."
-                    warn "The system may use swap heavily or become unstable."
+                    warn "You selected Standard Docker mode on a server with < 2 GB RAM."
+                    warn "The system will require swap and may experience performance degradation."
                     echo
 
                     if ask_yes_no "Are you sure you want Standard mode?" "N"; then
@@ -468,10 +470,57 @@ collect_configuration() {
         ENABLE_FAIL2BAN="false"
     fi
 
-    if ask_yes_no "Ensure 2 GB swap?" "Y"; then
-        ENABLE_SWAP="true"
+    # Swap configuration by parameters
+    echo
+    local default_swap_gb
+    if (( RAM_MB <= LOW_RAM_MB )); then
+        default_swap_gb=2
+    elif (( RAM_MB <= RECOMMENDED_RAM_MB )); then
+        default_swap_gb=2
     else
-        ENABLE_SWAP="false"
+        default_swap_gb=4
+    fi
+
+    local current_swap_mb
+    current_swap_mb="$(free -m 2>/dev/null | awk '/^Swap:/ {print $2}' || echo 0)"
+    current_swap_mb="${current_swap_mb:-0}"
+
+    if (( current_swap_mb > 0 )); then
+        log "Active swap detected: ${current_swap_mb} MB."
+        if ask_yes_no "Keep existing swap configuration?" "Y"; then
+            ENABLE_SWAP="keep"
+            SWAP_SIZE_GB=0
+        else
+            while true; do
+                local swap_input
+                swap_input="$(ask_default "New SWAP size in GB (0 to disable)" "$default_swap_gb")"
+                if [[ "$swap_input" =~ ^[0-9]+$ ]]; then
+                    SWAP_SIZE_GB="$swap_input"
+                    if (( SWAP_SIZE_GB > 0 )); then
+                        ENABLE_SWAP="true"
+                    else
+                        ENABLE_SWAP="false"
+                    fi
+                    break
+                fi
+                warn "Please enter a valid non-negative integer."
+            done
+        fi
+    else
+        while true; do
+            local swap_input
+            swap_input="$(ask_default "Configure SWAP size in GB (0 to skip)" "$default_swap_gb")"
+            if [[ "$swap_input" =~ ^[0-9]+$ ]]; then
+                SWAP_SIZE_GB="$swap_input"
+                if (( SWAP_SIZE_GB > 0 )); then
+                    ENABLE_SWAP="true"
+                else
+                    ENABLE_SWAP="false"
+                fi
+                break
+            fi
+            warn "Please enter a valid non-negative integer."
+        done
     fi
 
     save_configuration
@@ -490,6 +539,8 @@ ADMIN_USER=${ADMIN_USER_INPUT}
 ENABLE_UFW=${ENABLE_UFW}
 ENABLE_FAIL2BAN=${ENABLE_FAIL2BAN}
 ENABLE_SWAP=${ENABLE_SWAP}
+SWAP_SIZE_GB=${SWAP_SIZE_GB}
+REBOOT_REQUIRED=${REBOOT_REQUIRED:-false}
 OPENSHIP_ADMIN_NAME=${OPENSHIP_ADMIN_NAME_INPUT:-}
 OPENSHIP_ADMIN_EMAIL=${OPENSHIP_ADMIN_EMAIL_INPUT:-}
 OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-}
@@ -532,6 +583,38 @@ configure_timezone() {
 }
 
 # ------------------------------------------------------------------------------
+# System update
+# ------------------------------------------------------------------------------
+
+update_system() {
+    section "System update"
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    log "Updating package lists..."
+    apt-get update
+
+    log "Performing full system upgrade (dist-upgrade)..."
+    apt-get dist-upgrade -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold"
+
+    log "Cleaning unused packages and cache..."
+    apt-get autoremove -y
+    apt-get autoclean -y
+
+    if [[ -f /var/run/reboot-required ]]; then
+        REBOOT_REQUIRED="true"
+        warn "A system reboot is required to finish installing kernel or base library updates."
+    else
+        REBOOT_REQUIRED="false"
+        log "No reboot required at this time."
+    fi
+
+    success "Full system update completed."
+}
+
+# ------------------------------------------------------------------------------
 # Base packages
 # ------------------------------------------------------------------------------
 
@@ -540,8 +623,7 @@ install_base_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
-    apt-get update
-
+    log "Installing base system packages..."
     apt-get install -y \
         ca-certificates \
         curl \
@@ -550,7 +632,7 @@ install_base_packages() {
         jq \
         unzip \
         rsync \
-        htop \
+        btop \
         nano \
         vim \
         ncdu \
@@ -561,11 +643,71 @@ install_base_packages() {
         openssl \
         ufw \
         fail2ban \
-        unattended-upgrades
+        unattended-upgrades \
+        systemd-timesyncd
 
     apt-get autoremove -y
 
     success "Base packages installed."
+}
+
+# ------------------------------------------------------------------------------
+# System optimization
+# ------------------------------------------------------------------------------
+
+optimize_system() {
+    section "System optimization"
+
+    log "Applying kernel and network sysctl parameters (BBR, sockets, limits)..."
+
+    modprobe tcp_bbr 2>/dev/null || true
+
+    cat > /etc/sysctl.d/99-openship-control.conf <<'EOF'
+# TCP BBR Congestion Control & Queue Discipline
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+
+# Network socket and backlog tuning
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.ip_local_port_range = 10240 65535
+
+# File descriptor limits
+fs.file-max = 2097152
+
+# Virtual memory & swap tuning
+vm.swappiness = 10
+vm.vfs_cache_pressure = 50
+EOF
+
+    sysctl --system >/dev/null 2>&1 || true
+
+    log "Configuring file descriptor limits (nofile, nproc)..."
+    cat > /etc/security/limits.d/99-openship.conf <<'EOF'
+* soft nofile 65535
+* hard nofile 65535
+* soft nproc 65535
+* hard nproc 65535
+root soft nofile 65535
+root hard nofile 65535
+EOF
+
+    log "Limiting systemd journal size to 200MB..."
+    mkdir -p /etc/systemd/journald.conf.d
+    cat > /etc/systemd/journald.conf.d/99-openship-journal.conf <<'EOF'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=50M
+EOF
+    systemctl restart systemd-journald 2>/dev/null || true
+
+    log "Configuring time synchronization (systemd-timesyncd)..."
+    systemctl enable --now systemd-timesyncd 2>/dev/null || true
+    timedatectl set-ntp true 2>/dev/null || true
+
+    success "System optimization applied."
 }
 
 # ------------------------------------------------------------------------------
@@ -575,39 +717,43 @@ install_base_packages() {
 configure_swap() {
     section "Swap"
 
-    if swapon --show | grep -q .; then
-        success "Swap is already enabled."
-        swapon --show
+    if [[ "$ENABLE_SWAP" == "keep" ]]; then
+        success "Existing swap configuration preserved."
+        swapon --show || true
         return
     fi
 
-    if [[ "$ENABLE_SWAP" != "true" ]]; then
+    if [[ "$ENABLE_SWAP" != "true" || "${SWAP_SIZE_GB:-0}" -le 0 ]]; then
         warn "Swap disabled by configuration."
         return
     fi
 
-    log "Creating 2 GB swap..."
+    log "Configuring ${SWAP_SIZE_GB} GB swap..."
 
-    if [[ ! -f /swapfile ]]; then
-        fallocate -l 2G /swapfile
-        chmod 600 /swapfile
-        mkswap /swapfile
+    if swapon --show | grep -q "/swapfile"; then
+        log "Deactivating existing /swapfile..."
+        swapoff /swapfile || true
     fi
 
+    if [[ -f /swapfile ]]; then
+        rm -f /swapfile
+    fi
+
+    log "Allocating ${SWAP_SIZE_GB} GB for /swapfile..."
+    if ! fallocate -l "${SWAP_SIZE_GB}G" /swapfile 2>/dev/null; then
+        warn "fallocate failed, falling back to dd..."
+        dd if=/dev/zero of=/swapfile bs=1M count=$(( SWAP_SIZE_GB * 1024 )) status=progress
+    fi
+
+    chmod 600 /swapfile
+    mkswap /swapfile
     swapon /swapfile
 
     if ! grep -qE '^/swapfile[[:space:]]' /etc/fstab; then
         echo '/swapfile none swap sw 0 0' >> /etc/fstab
     fi
 
-    cat > /etc/sysctl.d/99-openship-control.conf <<'EOF'
-vm.swappiness=10
-vm.vfs_cache_pressure=50
-EOF
-
-    sysctl --system >/dev/null
-
-    success "2 GB swap configured."
+    success "${SWAP_SIZE_GB} GB swap configured and activated."
 }
 
 # ------------------------------------------------------------------------------
@@ -1117,6 +1263,12 @@ post_install_checks() {
     swapon --show || true
 
     echo
+    log "Optimizations:"
+    echo "  TCP congestion: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo 'unknown')"
+    echo "  File limits:    $(ulimit -n) open files"
+    echo "  Journal limit:  200M"
+
+    echo
     log "Listening ports:"
     ss -lntp || true
 
@@ -1159,7 +1311,19 @@ print_summary() {
     echo "  SSH: ${ENABLE_FAIL2BAN}"
     echo
     echo "Swap:"
-    echo "  2 GB: ${ENABLE_SWAP}"
+    if [[ "$ENABLE_SWAP" == "keep" ]]; then
+        echo "  Existing swap preserved"
+    elif [[ "$ENABLE_SWAP" == "true" ]]; then
+        echo "  ${SWAP_SIZE_GB} GB (configured)"
+    else
+        echo "  Disabled"
+    fi
+    echo
+    echo "Optimization:"
+    echo "  TCP BBR: enabled"
+    echo "  File descriptors: 65535"
+    echo "  Journald limit: 200M"
+    echo "  Time sync: systemd-timesyncd"
     echo
     echo "Installer state:"
     echo "  ${STATE_FILE}"
@@ -1172,6 +1336,13 @@ print_summary() {
         echo -e "${GREEN}OpenShip is configured in BARE mode.${NC}"
     else
         echo -e "${GREEN}OpenShip is configured in STANDARD Docker mode.${NC}"
+    fi
+
+    if [[ "${REBOOT_REQUIRED:-false}" == "true" ]]; then
+        echo
+        echo -e "${BOLD}${YELLOW}Reboot required:${NC}"
+        echo -e "  ${YELLOW}System packages/kernel were updated during installation.${NC}"
+        echo -e "  ${YELLOW}It is recommended to run 'sudo reboot' after completing setup.${NC}"
     fi
 
     echo
@@ -1216,8 +1387,10 @@ main() {
     configure_hostname
     configure_timezone
 
+    update_system
     install_base_packages
 
+    optimize_system
     configure_swap
     configure_admin_user
     configure_ssh
