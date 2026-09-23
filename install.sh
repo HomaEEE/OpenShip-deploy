@@ -534,6 +534,82 @@ collect_bare_openship_credentials() {
 collect_configuration() {
     section "Control Plane host configuration"
 
+    # ------------------------------------------------------------------
+    # Resume from previous installation state
+    # ------------------------------------------------------------------
+    if [[ -f "$STATE_FILE" ]]; then
+        echo
+        echo -e "${YELLOW}A previous installation state was found at:${NC}"
+        echo "  ${STATE_FILE}"
+        echo
+
+        if ask_yes_no "Resume using previously entered values?" "Y"; then
+            # shellcheck disable=SC1090
+            source "$STATE_FILE"
+
+            # Map state file keys back to input variables
+            HOSTNAME_INPUT="${HOSTNAME:-openship-control}"
+            TIMEZONE_INPUT="${TIMEZONE:-UTC}"
+            SSH_PORT_INPUT="${SSH_PORT:-22}"
+            ADMIN_USER_INPUT="${ADMIN_USER:-openship}"
+            ENABLE_UFW="${ENABLE_UFW:-true}"
+            ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-true}"
+            ENABLE_SWAP="${ENABLE_SWAP:-true}"
+            SWAP_SIZE_GB="${SWAP_SIZE_GB:-2}"
+            OPENSHIP_ADMIN_NAME_INPUT="${OPENSHIP_ADMIN_NAME:-}"
+            OPENSHIP_ADMIN_EMAIL_INPUT="${OPENSHIP_ADMIN_EMAIL:-}"
+            OPENSHIP_DOMAIN_KIND="${OPENSHIP_DOMAIN_KIND:-none}"
+            OPENSHIP_HOST="${OPENSHIP_HOST:-}"
+            OPENSHIP_PUBLIC_URL="${OPENSHIP_PUBLIC_URL:-}"
+            OPENSHIP_EDGE_ENABLED="${OPENSHIP_EDGE_ENABLED:-false}"
+            OPENSHIP_NO_HOST_CONTROL="${OPENSHIP_NO_HOST_CONTROL:-false}"
+
+            echo
+            echo "Loaded values:"
+            echo "  Hostname:   ${HOSTNAME_INPUT}"
+            echo "  Timezone:   ${TIMEZONE_INPUT}"
+            echo "  SSH port:   ${SSH_PORT_INPUT}"
+            echo "  Admin user: ${ADMIN_USER_INPUT}"
+            echo "  Mode:       ${INSTALL_MODE}"
+            echo "  Domain:     ${OPENSHIP_HOST:-none}"
+            echo
+
+            # Password must always be re-entered (never stored)
+            if [[ "$INSTALL_MODE" == "bare" ]]; then
+                echo -e "${YELLOW}Admin password must be entered again (never stored).${NC}"
+                echo
+
+                while true; do
+                    read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
+                    echo
+                    read -r -s -p "Repeat password: " OPENSHIP_ADMIN_PASSWORD_CONFIRM </dev/tty
+                    echo
+
+                    if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
+                        warn "Password cannot be empty."
+                        continue
+                    fi
+                    if (( ${#OPENSHIP_ADMIN_PASSWORD_INPUT} < 8 )); then
+                        warn "Password must be at least 8 characters."
+                        continue
+                    fi
+                    if [[ "$OPENSHIP_ADMIN_PASSWORD_INPUT" != "$OPENSHIP_ADMIN_PASSWORD_CONFIRM" ]]; then
+                        warn "Passwords do not match."
+                        continue
+                    fi
+                    break
+                done
+
+                unset OPENSHIP_ADMIN_PASSWORD_CONFIRM
+            fi
+
+            success "Configuration loaded from state file."
+            return
+        fi
+
+        echo
+    fi
+
     echo "This VPS will act as the OpenShip Control Plane."
     echo "Production applications (Laravel/CRM) should NOT be deployed here."
     echo
@@ -550,14 +626,96 @@ collect_configuration() {
         warn "Invalid hostname."
     done
 
-    TIMEZONE_INPUT="$(ask_default "Timezone" "UTC")"
+    # ------------------------------------------------------------------
+    # Timezone — interactive region/city selector
+    # ------------------------------------------------------------------
+    _select_timezone() {
+        local auto_tz
+        auto_tz="$(timedatectl show --property=Timezone --value 2>/dev/null || true)"
 
-    if ! timedatectl list-timezones 2>/dev/null |
-        grep -Fxq "$TIMEZONE_INPUT"; then
+        # Alias legacy names
+        case "${auto_tz}" in
+            "Europe/Kiev") auto_tz="Europe/Kyiv" ;;
+        esac
 
-        warn "Timezone '${TIMEZONE_INPUT}' not found. Using UTC."
-        TIMEZONE_INPUT="UTC"
-    fi
+        local default_tz="${auto_tz:-UTC}"
+
+        echo
+        echo "Timezone selection:"
+        echo "  Detected system timezone: ${default_tz}"
+        echo
+        echo "  1) Use detected timezone (${default_tz})"
+        echo "  2) Select from list by region"
+        echo "  3) Enter manually"
+        echo
+
+        local tz_choice
+        read -r -p "Select [1]: " tz_choice </dev/tty
+        tz_choice="${tz_choice:-1}"
+
+        case "$tz_choice" in
+            1)
+                TIMEZONE_INPUT="$default_tz"
+                ;;
+            2)
+                # Show unique regions
+                local regions
+                regions="$(timedatectl list-timezones 2>/dev/null | cut -d/ -f1 | sort -u)"
+                echo
+                echo "Available regions:"
+                echo "$regions" | nl -w3 -s') '
+                echo
+                local region_choice
+                read -r -p "Region number: " region_choice </dev/tty
+                local region
+                region="$(echo "$regions" | sed -n "${region_choice}p")"
+
+                if [[ -z "$region" ]]; then
+                    warn "Invalid region. Using ${default_tz}."
+                    TIMEZONE_INPUT="$default_tz"
+                else
+                    # Show cities in chosen region
+                    local cities
+                    cities="$(timedatectl list-timezones 2>/dev/null | grep "^${region}/" | sed "s|^${region}/||")"
+                    echo
+                    echo "Cities in ${region}:"
+                    echo "$cities" | nl -w3 -s') '
+                    echo
+                    local city_choice
+                    read -r -p "City number: " city_choice </dev/tty
+                    local city
+                    city="$(echo "$cities" | sed -n "${city_choice}p")"
+
+                    if [[ -z "$city" ]]; then
+                        warn "Invalid city. Using ${default_tz}."
+                        TIMEZONE_INPUT="$default_tz"
+                    else
+                        TIMEZONE_INPUT="${region}/${city}"
+                    fi
+                fi
+                ;;
+            3)
+                local manual_tz
+                manual_tz="$(ask_default "Enter timezone (e.g. Europe/Kyiv)" "$default_tz")"
+                # Alias legacy names
+                case "$manual_tz" in
+                    "Europe/Kiev") manual_tz="Europe/Kyiv" ;;
+                    "Asia/Calcutta") manual_tz="Asia/Kolkata" ;;
+                esac
+                TIMEZONE_INPUT="$manual_tz"
+                ;;
+            *)
+                TIMEZONE_INPUT="$default_tz"
+                ;;
+        esac
+
+        # Validate
+        if ! timedatectl list-timezones 2>/dev/null | grep -Fxq "$TIMEZONE_INPUT"; then
+            warn "Timezone '${TIMEZONE_INPUT}' not recognised. Falling back to UTC."
+            TIMEZONE_INPUT="UTC"
+        fi
+    }
+    _select_timezone
 
     while true; do
         SSH_PORT_INPUT="$(ask_default "SSH port" "22")"
@@ -665,9 +823,14 @@ configure_hostname() {
 configure_timezone() {
     section "Timezone"
 
-    timedatectl set-timezone "$TIMEZONE_INPUT"
-
-    success "Timezone: ${TIMEZONE_INPUT}"
+    if timedatectl set-timezone "$TIMEZONE_INPUT" 2>/dev/null; then
+        success "Timezone: ${TIMEZONE_INPUT}"
+    else
+        warn "Failed to set timezone '${TIMEZONE_INPUT}'. Falling back to UTC."
+        TIMEZONE_INPUT="UTC"
+        timedatectl set-timezone UTC || true
+        warn "Timezone set to UTC."
+    fi
 }
 
 # ------------------------------------------------------------------------------
