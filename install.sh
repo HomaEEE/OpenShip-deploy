@@ -174,6 +174,41 @@ ask_default() {
     echo "${value:-$default}"
 }
 
+ask_password() {
+    local prompt="$1"
+    local password=""
+    local char=""
+
+    if [[ ! -e /dev/tty || ! -r /dev/tty ]]; then
+        read -r -s -p "$prompt" password
+        echo
+        echo "$password"
+        return
+    fi
+
+    printf "%s" "$prompt" >/dev/tty
+
+    while IFS= read -r -s -n 1 char </dev/tty; do
+        if [[ -z "$char" ]]; then
+            printf "\n" >/dev/tty
+            break
+        fi
+
+        # Backspace / Delete (127 or \b)
+        if [[ "$char" == $'\177' || "$char" == $'\b' ]]; then
+            if (( ${#password} > 0 )); then
+                password="${password%?}"
+                printf "\b \b" >/dev/tty
+            fi
+        else
+            password+="$char"
+            printf "*" >/dev/tty
+        fi
+    done
+
+    echo "$password"
+}
+
 valid_hostname() {
     [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]
 }
@@ -210,9 +245,9 @@ check_os() {
         die "Ubuntu is required. Detected: ${ID:-unknown}"
     fi
 
-    if [[ "${VERSION_ID:-}" != "24.04" ]]; then
-        warn "This installer is designed for Ubuntu 24.04 LTS."
-        warn "Detected: Ubuntu ${VERSION_ID:-unknown}"
+    local major_ver="${VERSION_ID%%.*}"
+    if ! [[ "$major_ver" =~ ^[0-9]+$ ]] || (( major_ver < 24 )); then
+        warn "This installer is designed for Ubuntu 24+ (detected: Ubuntu ${VERSION_ID:-unknown})."
 
         if ! ask_yes_no "Continue anyway?" "N"; then
             die "Installation cancelled."
@@ -418,8 +453,7 @@ collect_bare_openship_credentials() {
     done
 
     while true; do
-        read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
-        echo
+        OPENSHIP_ADMIN_PASSWORD_INPUT="$(ask_password "OpenShip administrator password: ")"
 
         if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
             warn "Password cannot be empty."
@@ -439,28 +473,33 @@ collect_bare_openship_credentials() {
     OPENSHIP_PUBLIC_URL=""
     OPENSHIP_HOST=""
     OPENSHIP_EDGE_ENABLED="false"
+    OPENSHIP_PROXY_MODE="none"
 
     echo
     echo "OpenShip instance reachability:"
     echo
-    echo "  1) Public HTTPS domain (Recommended)"
-    echo "     Use OpenShip Edge (:80/:443) to route your domain (e.g. os.example.com)"
-    echo "     directly to the OpenShip dashboard."
+    echo "  1) Public HTTPS via OpenShip Edge (Docker required)"
+    echo "     Use OpenShip containerized Edge (:80/:443) with Let's Encrypt."
     echo
     echo "  2) Local / private"
     echo "     Dashboard stays on internal port 3001 without public ingress."
     echo "     Cloudflare Tunnel or custom VPN can be configured later."
     echo
-    echo "  3) Cancel"
+    echo "  3) Public HTTPS via Caddy (Native, no Docker — Recommended for Bare)"
+    echo "     Installs Caddy, auto-issues SSL certificate, and reverse-proxies"
+    echo "     :80/:443 directly to OpenShip (:3001). Ultra-lightweight."
+    echo
+    echo "  4) Cancel"
     echo
 
     while true; do
-        read -r -p "Select [1]: " reachability </dev/tty
-        reachability="${reachability:-1}"
+        read -r -p "Select [3]: " reachability </dev/tty
+        reachability="${reachability:-3}"
         case "$reachability" in
             1)
-                OPENSHIP_DOMAIN_KIND="byo"
+                OPENSHIP_DOMAIN_KIND="custom"
                 OPENSHIP_EDGE_ENABLED="true"
+                OPENSHIP_PROXY_MODE="edge"
                 while true; do
                     OPENSHIP_HOST="$(ask_default "OpenShip domain (e.g. os.example.com)" "")"
                     if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
@@ -474,9 +513,24 @@ collect_bare_openship_credentials() {
             2)
                 OPENSHIP_DOMAIN_KIND="none"
                 OPENSHIP_EDGE_ENABLED="false"
+                OPENSHIP_PROXY_MODE="none"
                 break
                 ;;
             3)
+                OPENSHIP_DOMAIN_KIND="byo"
+                OPENSHIP_EDGE_ENABLED="false"
+                OPENSHIP_PROXY_MODE="caddy"
+                while true; do
+                    OPENSHIP_HOST="$(ask_default "OpenShip domain (e.g. os.example.com)" "")"
+                    if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+                        break
+                    fi
+                    warn "Enter a valid DNS hostname, for example os.example.com."
+                done
+                OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+                break
+                ;;
+            4)
                 die "Installation cancelled."
                 ;;
             *)
@@ -566,7 +620,24 @@ collect_configuration() {
             OPENSHIP_HOST="${OPENSHIP_HOST:-}"
             OPENSHIP_PUBLIC_URL="${OPENSHIP_PUBLIC_URL:-}"
             OPENSHIP_EDGE_ENABLED="${OPENSHIP_EDGE_ENABLED:-false}"
+            OPENSHIP_PROXY_MODE="${OPENSHIP_PROXY_MODE:-none}"
             OPENSHIP_NO_HOST_CONTROL="${OPENSHIP_NO_HOST_CONTROL:-false}"
+
+            # Auto-infer proxy mode if loading an older state file
+            if [[ "$OPENSHIP_PROXY_MODE" == "none" ]]; then
+                if [[ "$OPENSHIP_EDGE_ENABLED" == "true" ]]; then
+                    OPENSHIP_PROXY_MODE="edge"
+                    OPENSHIP_DOMAIN_KIND="custom"
+                elif [[ "$OPENSHIP_DOMAIN_KIND" == "byo" && -n "$OPENSHIP_HOST" ]]; then
+                    OPENSHIP_PROXY_MODE="caddy"
+                fi
+            elif [[ "$OPENSHIP_PROXY_MODE" == "edge" ]]; then
+                OPENSHIP_EDGE_ENABLED="true"
+                OPENSHIP_DOMAIN_KIND="custom"
+            elif [[ "$OPENSHIP_PROXY_MODE" == "caddy" ]]; then
+                OPENSHIP_EDGE_ENABLED="false"
+                OPENSHIP_DOMAIN_KIND="byo"
+            fi
 
             echo
             echo "Loaded values:"
@@ -584,8 +655,7 @@ collect_configuration() {
                 echo
 
                 while true; do
-                    read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
-                    echo
+                    OPENSHIP_ADMIN_PASSWORD_INPUT="$(ask_password "OpenShip administrator password: ")"
 
                     if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
                         warn "Password cannot be empty."
@@ -624,95 +694,89 @@ collect_configuration() {
     done
 
     # ------------------------------------------------------------------
-    # Timezone — interactive region/city selector
+    # Timezone — auto-detect → region → city
     # ------------------------------------------------------------------
     _select_timezone() {
-        local auto_tz
-        auto_tz="$(timedatectl show --property=Timezone --value 2>/dev/null || true)"
+        local auto_tz="" client_ip="${SSH_CLIENT%% *}"
+
+        # Try client timezone via SSH IP
+        if [[ -n "$client_ip" && ! "$client_ip" =~ ^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.) ]]; then
+            auto_tz="$(curl -fsSL --max-time 2 "http://ip-api.com/line/${client_ip}?fields=timezone" 2>/dev/null || true)"
+            if [[ ! "$auto_tz" =~ ^[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+$ ]]; then
+                auto_tz=""
+            fi
+        fi
+
+        # Fallback to server system timezone
+        if [[ -z "$auto_tz" ]]; then
+            auto_tz="$(timedatectl show --property=Timezone --value 2>/dev/null || true)"
+        fi
 
         # Alias legacy names
         case "${auto_tz}" in
-            "Europe/Kiev") auto_tz="Europe/Kyiv" ;;
+            "Europe/Kiev")     auto_tz="Europe/Kyiv" ;;
+            "Asia/Calcutta")   auto_tz="Asia/Kolkata" ;;
         esac
 
         local default_tz="${auto_tz:-UTC}"
 
         echo
-        echo "Timezone selection:"
-        echo "  Detected system timezone: ${default_tz}"
-        echo
-        echo "  1) Use detected timezone (${default_tz})"
-        echo "  2) Select from list by region"
-        echo "  3) Enter manually"
-        echo
+        log "Detected timezone: ${BOLD}${default_tz}${NC}"
 
-        local tz_choice
-        read -r -p "Select [1]: " tz_choice </dev/tty
-        tz_choice="${tz_choice:-1}"
+        if ask_yes_no "Use ${default_tz}?" "Y"; then
+            TIMEZONE_INPUT="$default_tz"
+        else
+            # Step 1: Region
+            local regions
+            regions="$(timedatectl list-timezones 2>/dev/null | cut -d/ -f1 | sort -u)"
+            local region_count
+            region_count="$(echo "$regions" | wc -l)"
 
-        case "$tz_choice" in
-            1)
-                TIMEZONE_INPUT="$default_tz"
-                ;;
-            2)
-                # Show unique regions
-                local regions
-                regions="$(timedatectl list-timezones 2>/dev/null | cut -d/ -f1 | sort -u)"
-                echo
-                echo "Available regions:"
-                echo "$regions" | nl -w3 -s') '
-                echo
-                local region_choice
-                read -r -p "Region number: " region_choice </dev/tty
-                local region
-                region="$(echo "$regions" | sed -n "${region_choice}p")"
+            echo
+            echo -e "  ${BOLD}Regions:${NC}"
+            echo "$regions" | nl -w3 -s') ' | column -c 60
+            echo
 
-                if [[ -z "$region" ]]; then
-                    warn "Invalid region. Using ${default_tz}."
-                    TIMEZONE_INPUT="$default_tz"
-                else
-                    # Show cities in chosen region
-                    local cities
-                    cities="$(timedatectl list-timezones 2>/dev/null | grep "^${region}/" | sed "s|^${region}/||")"
-                    echo
-                    echo "Cities in ${region}:"
-                    echo "$cities" | nl -w3 -s') '
-                    echo
-                    local city_choice
-                    read -r -p "City number: " city_choice </dev/tty
-                    local city
-                    city="$(echo "$cities" | sed -n "${city_choice}p")"
+            local region_num region
+            while true; do
+                read -r -p "  Region [1-${region_count}]: " region_num </dev/tty
+                region="$(echo "$regions" | sed -n "${region_num}p")"
+                [[ -n "$region" ]] && break
+                warn "Invalid number, try again."
+            done
 
-                    if [[ -z "$city" ]]; then
-                        warn "Invalid city. Using ${default_tz}."
-                        TIMEZONE_INPUT="$default_tz"
-                    else
-                        TIMEZONE_INPUT="${region}/${city}"
-                    fi
-                fi
-                ;;
-            3)
-                local manual_tz
-                manual_tz="$(ask_default "Enter timezone (e.g. Europe/Kyiv)" "$default_tz")"
-                # Alias legacy names
-                case "$manual_tz" in
-                    "Europe/Kiev") manual_tz="Europe/Kyiv" ;;
-                    "Asia/Calcutta") manual_tz="Asia/Kolkata" ;;
-                esac
-                TIMEZONE_INPUT="$manual_tz"
-                ;;
-            *)
-                TIMEZONE_INPUT="$default_tz"
-                ;;
-        esac
+            # Step 2: City
+            local cities
+            cities="$(timedatectl list-timezones 2>/dev/null | grep "^${region}/" | sed "s|^${region}/||")"
+            local city_count
+            city_count="$(echo "$cities" | wc -l)"
+
+            echo
+            echo -e "  ${BOLD}Cities in ${region}:${NC}"
+            echo "$cities" | nl -w3 -s') ' | column -c 60
+            echo
+
+            local city_num city
+            while true; do
+                read -r -p "  City [1-${city_count}]: " city_num </dev/tty
+                city="$(echo "$cities" | sed -n "${city_num}p")"
+                [[ -n "$city" ]] && break
+                warn "Invalid number, try again."
+            done
+
+            TIMEZONE_INPUT="${region}/${city}"
+        fi
 
         # Validate
         if ! timedatectl list-timezones 2>/dev/null | grep -Fxq "$TIMEZONE_INPUT"; then
             warn "Timezone '${TIMEZONE_INPUT}' not recognised. Falling back to UTC."
             TIMEZONE_INPUT="UTC"
         fi
+
+        success "Timezone: ${TIMEZONE_INPUT}"
     }
     _select_timezone
+
 
     while true; do
         SSH_PORT_INPUT="$(ask_default "SSH port" "22")"
@@ -791,6 +855,7 @@ OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-none}
 OPENSHIP_HOST=${OPENSHIP_HOST:-}
 OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL:-}
 OPENSHIP_EDGE_ENABLED=${OPENSHIP_EDGE_ENABLED:-false}
+OPENSHIP_PROXY_MODE=${OPENSHIP_PROXY_MODE:-none}
 OPENSHIP_NO_HOST_CONTROL=${OPENSHIP_NO_HOST_CONTROL:-false}
 EOF
 
@@ -1079,18 +1144,18 @@ configure_ufw() {
     ufw allow "${SSH_PORT_INPUT}/tcp" \
         comment "SSH"
 
-    # OpenShip Edge (:80/:443) — only when Edge container is enabled.
-    # In Private mode (no Edge), only SSH is exposed.
-    if [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
+    # Web ports (:80/:443) — only when Edge or Caddy is enabled.
+    # In Private mode (no proxy), only SSH is exposed.
+    if [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" || "${OPENSHIP_PROXY_MODE:-none}" == "caddy" ]]; then
         ufw allow 80/tcp \
-            comment "OpenShip Edge HTTP (ACME + proxy)"
+            comment "Web HTTP (ACME + proxy)"
 
         ufw allow 443/tcp \
-            comment "OpenShip Edge HTTPS"
+            comment "Web HTTPS"
 
-        log "UFW: opened :80 (ACME challenge) and :443 (Edge TLS) for OpenShip Edge."
+        log "UFW: opened :80 (ACME challenge) and :443 (TLS) for web traffic."
     else
-        log "UFW: Private mode — :80/:443 NOT opened (no Edge container)."
+        log "UFW: Private mode — :80/:443 NOT opened (no public proxy)."
     fi
 
     # IMPORTANT:
@@ -1354,10 +1419,16 @@ run_bare_openship_setup() {
         log "--no-host-control is DISABLED: Control VPS terminal will be accessible."
     fi
 
-    if [[ "$OPENSHIP_DOMAIN_KIND" == "byo" ]]; then
-        # byo = Bring Your Own ingress (Cloudflare / reverse proxy handles TLS).
-        # OpenShip seeds the domain with externalIngress=true, sslStatus=external.
-        # Do NOT pass --edge takeover — that triggers Docker edge container routines.
+    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
+        # OpenShip Edge (:80/:443 via OpenResty Docker container + Let's Encrypt TLS)
+        args+=(
+            --hostname "$OPENSHIP_HOST"
+            --public-url "$OPENSHIP_PUBLIC_URL"
+            --edge takeover
+            --acme-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
+        )
+    elif [[ "$OPENSHIP_DOMAIN_KIND" == "byo" ]]; then
+        # byo = Bring Your Own ingress (external reverse proxy handles TLS)
         args+=(
             --hostname "$OPENSHIP_HOST"
             --public-url "$OPENSHIP_PUBLIC_URL"
@@ -1388,6 +1459,7 @@ run_openship_setup() {
         echo
         run_bare_openship_setup
         wait_for_api_healthy
+        configure_caddy
         return
     fi
 
@@ -1463,6 +1535,45 @@ wait_for_api_healthy() {
 }
 
 # ------------------------------------------------------------------------------
+# Caddy Reverse Proxy
+# ------------------------------------------------------------------------------
+
+configure_caddy() {
+    if [[ "${OPENSHIP_PROXY_MODE:-none}" != "caddy" ]]; then
+        return
+    fi
+
+    section "Caddy Reverse Proxy"
+
+    if ! command_exists caddy; then
+        log "Installing Caddy web server..."
+        apt-get update -qq
+        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes 2>/dev/null || true
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb822' | tee /etc/apt/sources.list.d/caddy-stable.sources >/dev/null
+
+        apt-get update -qq
+        apt-get install -y caddy
+    else
+        success "Caddy is already installed."
+    fi
+
+    log "Configuring /etc/caddy/Caddyfile for ${OPENSHIP_HOST} -> 127.0.0.1:3001..."
+    mkdir -p /etc/caddy
+    cat > /etc/caddy/Caddyfile <<EOF
+${OPENSHIP_HOST} {
+    reverse_proxy 127.0.0.1:3001
+}
+EOF
+
+    systemctl enable caddy
+    systemctl restart caddy
+
+    success "Caddy configured and running for https://${OPENSHIP_HOST}"
+}
+
+# ------------------------------------------------------------------------------
 # Post-install
 # ------------------------------------------------------------------------------
 
@@ -1513,10 +1624,12 @@ print_summary() {
     section "Installation complete"
 
     local mode_label="${INSTALL_MODE^^}"
-    local domain_label="${OPENSHIP_HOST:-none}"
-    local edge_label="${OPENSHIP_EDGE_ENABLED:-false}"
-    local hc_label
-    hc_label="$( [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" == "true" ]] && echo "isolated" || echo "full control" )"
+    local proxy_label="none"
+    if [[ "${OPENSHIP_PROXY_MODE:-none}" == "caddy" ]]; then
+        proxy_label="Caddy (Native HTTPS)"
+    elif [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
+        proxy_label="OpenShip Edge (Docker)"
+    fi
 
     echo -e "  ${BOLD}${CYAN}OpenShip Control Plane${NC}"
     echo
@@ -1529,15 +1642,15 @@ print_summary() {
     printf "  ${DIM}%-18s${NC}  %s\n" "Fail2ban"     "${ENABLE_FAIL2BAN}"
     printf "  ${DIM}%-18s${NC}  %s GB\n" "Swap"       "${SWAP_SIZE_GB:-2}"
     printf "  ${DIM}%-18s${NC}  %s\n" "Domain"       "$domain_label"
-    printf "  ${DIM}%-18s${NC}  %s\n" "Edge"         "$edge_label"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Proxy"        "$proxy_label"
     echo
     printf "  ${DIM}%-18s${NC}  %s\n" "State file"   "${STATE_FILE}"
     printf "  ${DIM}%-18s${NC}  %s\n" "Install log"  "${LOG_FILE}"
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        if [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
-            success "OpenShip Bare  →  ${OPENSHIP_PUBLIC_URL}"
+        if [[ -n "${OPENSHIP_PUBLIC_URL:-}" ]]; then
+            success "OpenShip Bare  →  ${OPENSHIP_PUBLIC_URL} (${proxy_label})"
         else
             success "OpenShip Bare  →  http://localhost:3001  (private)"
         fi
