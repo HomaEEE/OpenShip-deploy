@@ -1213,6 +1213,7 @@ run_bare_openship_setup() {
         up
         --bare
         --non-interactive
+        --no-host-control
         --admin-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
         --admin-name "$OPENSHIP_ADMIN_NAME_INPUT"
         --domain-kind "$OPENSHIP_DOMAIN_KIND"
