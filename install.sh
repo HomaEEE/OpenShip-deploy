@@ -1103,92 +1103,131 @@ preflight_openship() {
 # ------------------------------------------------------------------------------
 
 collect_bare_openship_credentials() {
-    section "OpenShip public URL"
+    section "OpenShip Bare configuration"
 
-    echo "OpenShip self-hosted GitHub App integration requires a public HTTPS URL."
-    echo "GitHub must be able to reach the setup callback and webhook endpoint."
+    echo "Bare mode uses the supported headless OpenShip flow:"
+    echo "  openship up --bare --non-interactive"
     echo
-    echo "Examples:"
-    echo "  https://openship.example.com"
-    echo "  https://control.example.com"
+    echo "The server will use OpenShip's embedded database and will not"
+    echo "create the OpenShip Docker/Compose stack."
     echo
-    echo "For a private/local instance, choose Local. GitHub App registration"
-    echo "will not be available until OPENSHIP_PUBLIC_URL is configured later."
+
+    OPENSHIP_ADMIN_NAME_INPUT="$(ask_default "OpenShip administrator name" "$ADMIN_USER_INPUT")"
+
+    while true; do
+        OPENSHIP_ADMIN_EMAIL_INPUT="$(ask_default "OpenShip administrator email" "")"
+        if [[ "$OPENSHIP_ADMIN_EMAIL_INPUT" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+            break
+        fi
+        warn "Enter a valid email address."
+    done
+
+    while true; do
+        read -r -s -p "OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_INPUT </dev/tty
+        echo
+        read -r -s -p "Repeat OpenShip administrator password: " OPENSHIP_ADMIN_PASSWORD_CONFIRM </dev/tty
+        echo
+
+        if [[ -z "$OPENSHIP_ADMIN_PASSWORD_INPUT" ]]; then
+            warn "Password cannot be empty."
+            continue
+        fi
+
+        if (( ${#OPENSHIP_ADMIN_PASSWORD_INPUT} < 8 )); then
+            warn "Password must contain at least 8 characters."
+            continue
+        fi
+
+        if [[ "$OPENSHIP_ADMIN_PASSWORD_INPUT" != "$OPENSHIP_ADMIN_PASSWORD_CONFIRM" ]]; then
+            warn "Passwords do not match."
+            continue
+        fi
+
+        break
+    done
+
+    unset OPENSHIP_ADMIN_PASSWORD_CONFIRM
+
+    OPENSHIP_DOMAIN_KIND="none"
+    OPENSHIP_PUBLIC_URL=""
+    OPENSHIP_HOST=""
+
     echo
-    echo "OpenShip reachability:"
+    echo "OpenShip instance reachability:"
     echo
-    echo "  1) Local / private"
-    echo "     Keep the dashboard private on this VPS."
+    echo "  1) This machine only"
+    echo "     Dashboard stays local to the VPS. A Cloudflare Tunnel or reverse proxy"
+    echo "     can expose it later without changing the Bare runtime."
     echo
-    echo "  2) Public HTTPS domain"
-    echo "     Configure OPENSHIP_PUBLIC_URL for GitHub App callbacks/webhooks."
+    echo "  2) Custom domain"
+    echo "     Configure a public hostname during the Bare installation."
     echo
     echo "  3) Cancel"
     echo
+
     while true; do
-        read -r -p "Select [2]: " reachability </dev/tty
-        reachability="${reachability:-2}"
+        read -r -p "Select [1]: " reachability </dev/tty
+        reachability="${reachability:-1}"
         case "$reachability" in
             1)
                 OPENSHIP_DOMAIN_KIND="none"
-                OPENSHIP_PUBLIC_URL=""
-                OPENSHIP_HOST=""
-                break ;;
+                break
+                ;;
             2)
                 OPENSHIP_DOMAIN_KIND="custom"
                 while true; do
-                    OPENSHIP_HOST="$(ask_default "OpenShip public hostname" "")"
+                    OPENSHIP_HOST="$(ask_default "OpenShip domain" "")"
                     if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
                         break
                     fi
-                    warn "Enter a valid DNS hostname, for example openship.example.com."
+                    warn "Enter a valid DNS hostname, for example ops.example.com."
                 done
                 OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
-                break ;;
-            3) die "Installation cancelled." ;;
-            *) echo "Invalid choice." ;;
+                break
+                ;;
+            3)
+                die "Installation cancelled."
+                ;;
+            *)
+                echo "Invalid choice."
+                ;;
         esac
     done
+
     echo
-    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        success "OpenShip public URL: ${OPENSHIP_PUBLIC_URL}"
-        echo
-        warn "Make sure DNS and HTTPS routing for this hostname point to this VPS"
-        warn "before creating the GitHub App."
-    else
-        success "OpenShip will remain local/private."
-    fi
+    save_configuration
+    success "Bare OpenShip configuration collected."
 }
 
 run_bare_openship_setup() {
     collect_bare_openship_credentials
 
     echo
-    echo "Starting OpenShip Bare interactive setup..."
+    echo "Starting OpenShip Bare service..."
     echo
-    echo "The official OpenShip wizard will now take over."
-    echo "Do not close this terminal during setup."
-    echo
+
+    export OPENSHIP_ADMIN_PASSWORD="$OPENSHIP_ADMIN_PASSWORD_INPUT"
+
+    local -a args
+    args=(
+        up
+        --bare
+        --non-interactive
+        --admin-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
+        --admin-name "$OPENSHIP_ADMIN_NAME_INPUT"
+        --domain-kind "$OPENSHIP_DOMAIN_KIND"
+    )
 
     if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
-        export OPENSHIP_PUBLIC_URL
-        export OPENSHIP_HOST
-    else
-        unset OPENSHIP_PUBLIC_URL
-        unset OPENSHIP_HOST
+        args+=(--hostname "$OPENSHIP_HOST" --public-url "$OPENSHIP_PUBLIC_URL")
     fi
 
-    [[ -e /dev/tty ]] ||
-        die "Interactive terminal /dev/tty is not available for OpenShip setup."
+    openship "${args[@]}"
 
-    # Keep the official guided wizard interactive. On a low-memory Bare host,
-    # Docker is intentionally absent, so the wizard selects the lightweight runtime.
-    openship </dev/tty >/dev/tty 2>/dev/tty
+    unset OPENSHIP_ADMIN_PASSWORD
+    unset OPENSHIP_ADMIN_PASSWORD_INPUT
 
-    unset OPENSHIP_PUBLIC_URL
-    unset OPENSHIP_HOST
-
-    success "OpenShip interactive setup completed."
+    success "OpenShip Bare setup completed."
 }
 
 run_openship_setup() {
@@ -1334,6 +1373,14 @@ print_summary() {
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
         echo -e "${GREEN}OpenShip is configured in BARE mode.${NC}"
+        if [[ -n "${OPENSHIP_ADMIN_EMAIL_INPUT:-}" ]]; then
+            echo "  Admin email: ${OPENSHIP_ADMIN_EMAIL_INPUT}"
+        fi
+        if [[ "${OPENSHIP_DOMAIN_KIND:-}" == "custom" && -n "${OPENSHIP_PUBLIC_URL:-}" ]]; then
+            echo "  URL:         ${OPENSHIP_PUBLIC_URL}"
+        else
+            echo "  URL:         http://127.0.0.1:3001 (local only)"
+        fi
     else
         echo -e "${GREEN}OpenShip is configured in STANDARD Docker mode.${NC}"
     fi
