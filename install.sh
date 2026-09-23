@@ -202,9 +202,11 @@ ask_yes_no() {
 
     if [[ "$default" == "Y" ]]; then
         read -r -p "$prompt [Y/n]: " answer </dev/tty
+        answer="${answer//[$'\r\n\t ']/}"
         answer="${answer:-Y}"
     else
         read -r -p "$prompt [y/N]: " answer </dev/tty
+        answer="${answer//[$'\r\n\t ']/}"
         answer="${answer:-N}"
     fi
 
@@ -224,6 +226,7 @@ ask_default() {
     local value
 
     read -r -p "$prompt [$default]: " value </dev/tty
+    value="${value//[$'\r\n']/}"
 
     echo "${value:-$default}"
 }
@@ -236,14 +239,14 @@ ask_password() {
     if [[ ! -e /dev/tty || ! -r /dev/tty ]]; then
         read -r -s -p "$prompt" password
         echo
-        echo "$password"
+        echo "${password//[$'\r\n']/}"
         return
     fi
 
     printf "%s" "$prompt" >/dev/tty
 
     while IFS= read -r -s -n 1 char </dev/tty; do
-        if [[ -z "$char" ]]; then
+        if [[ -z "$char" || "$char" == $'\r' || "$char" == $'\n' ]]; then
             printf "\n" >/dev/tty
             break
         fi
@@ -260,7 +263,7 @@ ask_password() {
         fi
     done
 
-    echo "$password"
+    echo "${password//[$'\r\n']/}"
 }
 
 valid_hostname() {
@@ -404,6 +407,7 @@ select_installation_mode() {
 
         while true; do
             read -r -p "Select [1]: " choice </dev/tty
+            choice="${choice//[$'\r\n\t ']/}"
             choice="${choice:-1}"
 
             case "$choice" in
@@ -447,6 +451,7 @@ select_installation_mode() {
 
         while true; do
             read -r -p "Select [1]: " choice </dev/tty
+            choice="${choice//[$'\r\n\t ']/}"
             choice="${choice:-1}"
 
             case "$choice" in
@@ -500,6 +505,7 @@ collect_cloudflare_origin_credentials() {
 
     local method_choice
     read -r -p "Select [1]: " method_choice </dev/tty
+    method_choice="${method_choice//[$'\r\n\t ']/}"
     method_choice="${method_choice:-1}"
 
     if [[ "$method_choice" == "2" ]]; then
@@ -632,6 +638,7 @@ collect_bare_openship_credentials() {
 
     while true; do
         read -r -p "Select [3]: " reachability </dev/tty
+        reachability="${reachability//[$'\r\n\t ']/}"
         reachability="${reachability:-3}"
         case "$reachability" in
             1)
@@ -681,6 +688,7 @@ collect_bare_openship_credentials() {
 
                 while true; do
                     read -r -p "Select SSL mode [1]: " ssl_choice </dev/tty
+                    ssl_choice="${ssl_choice//[$'\r\n\t ']/}"
                     ssl_choice="${ssl_choice:-1}"
                     case "$ssl_choice" in
                         1)
@@ -742,6 +750,7 @@ collect_bare_openship_credentials() {
 
     while true; do
         read -r -p "Select [1]: " hc_choice </dev/tty
+        hc_choice="${hc_choice//[$'\r\n\t ']/}"
         hc_choice="${hc_choice:-1}"
         case "$hc_choice" in
             1)
@@ -920,6 +929,7 @@ collect_configuration() {
             local region_num region
             while true; do
                 read -r -p "  Region [1-${region_count}]: " region_num </dev/tty
+                region_num="${region_num//[$'\r\n\t ']/}"
                 region="$(echo "$regions" | sed -n "${region_num}p")"
                 [[ -n "$region" ]] && break
                 warn "Invalid number, try again."
@@ -939,6 +949,7 @@ collect_configuration() {
             local city_num city
             while true; do
                 read -r -p "  City [1-${city_count}]: " city_num </dev/tty
+                city_num="${city_num//[$'\r\n\t ']/}"
                 city="$(echo "$cities" | sed -n "${city_num}p")"
                 [[ -n "$city" ]] && break
                 warn "Invalid number, try again."
