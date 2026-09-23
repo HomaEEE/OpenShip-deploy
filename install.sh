@@ -324,12 +324,6 @@ check_resources() {
 select_installation_mode() {
     section "OpenShip installation mode"
 
-    echo "Detected resources:"
-    echo "  RAM:  ${RAM_MB} MB"
-    echo "  CPU:  ${CPU_COUNT}"
-    echo "  Disk: ${DISK_GB} GB"
-    echo
-
     if (( RAM_MB < RECOMMENDED_RAM_MB )); then
 
         echo -e "${BOLD}${YELLOW}"
@@ -338,7 +332,7 @@ select_installation_mode() {
         echo "This server will act as an OpenShip Control Plane."
         echo "Bare mode runs OpenShip as a lightweight native service with"
         echo "an embedded database (avoiding Postgres & Redis containers)."
-        echo "OpenShip Edge (:80/:443) will be used to route control plane traffic."
+        echo "Web traffic can be routed via Caddy or OpenShip Edge (:80/:443)."
         echo -e "${NC}"
 
         echo "Choose installation mode:"
@@ -1552,8 +1546,9 @@ configure_caddy() {
         apt-get update -qq
         apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
 
+        rm -f /etc/apt/sources.list.d/caddy-stable.sources
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes 2>/dev/null || true
-        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb822' | tee /etc/apt/sources.list.d/caddy-stable.sources >/dev/null
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
 
         apt-get update -qq
         apt-get install -y caddy
