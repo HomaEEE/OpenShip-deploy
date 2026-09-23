@@ -49,6 +49,7 @@ if [[ -t 1 ]]; then
     CYAN='\033[0;36m'
     MAGENTA='\033[0;35m'
     BOLD='\033[1m'
+    DIM='\033[2m'
     NC='\033[0m'
 else
     RED=''
@@ -58,8 +59,12 @@ else
     CYAN=''
     MAGENTA=''
     BOLD=''
+    DIM=''
     NC=''
 fi
+
+# Terminal width (default 60 if unknown)
+_TW="$(tput cols 2>/dev/null || echo 60)"
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -71,33 +76,40 @@ touch "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 log() {
-    echo -e "${BLUE}[INFO]${NC} $*"
+    echo -e "  ${BLUE}·${NC} $*"
 }
 
 success() {
-    echo -e "${GREEN}[ OK ]${NC} $*"
+    echo -e "  ${GREEN}✓${NC} $*"
 }
 
 warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*"
+    echo -e "  ${YELLOW}⚠${NC}  $*"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
+    echo -e "  ${RED}✗${NC} $*" >&2
 }
 
 die() {
-    error "$*"
     echo
-    error "Installation log: ${LOG_FILE}"
+    error "$*"
+    echo -e "  ${DIM}Log: ${LOG_FILE}${NC}"
+    echo
     exit 1
 }
 
 section() {
+    local title=" $* "
+    local width=$(( _TW < 72 ? _TW : 72 ))
+    local pad=$(( (width - ${#title} - 2) / 2 ))
+    local line
+    printf -v line '%*s' "$width" ''
+    line="${line// /─}"
+    local prefix="${line:0:$pad}"
+    local suffix="${line:0:$(( width - pad - ${#title} ))}"
     echo
-    echo -e "${BOLD}${CYAN}============================================================${NC}"
-    echo -e "${BOLD}${CYAN} $*${NC}"
-    echo -e "${BOLD}${CYAN}============================================================${NC}"
+    echo -e "${BOLD}${CYAN}${prefix}${title}${suffix}${NC}"
     echo
 }
 
@@ -1500,52 +1512,42 @@ post_install_checks() {
 print_summary() {
     section "Installation complete"
 
+    local mode_label="${INSTALL_MODE^^}"
+    local domain_label="${OPENSHIP_HOST:-none}"
+    local edge_label="${OPENSHIP_EDGE_ENABLED:-false}"
+    local hc_label
+    hc_label="$( [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" == "true" ]] && echo "isolated" || echo "full control" )"
+
+    echo -e "  ${BOLD}${CYAN}OpenShip Control Plane${NC}"
     echo
-    echo -e "${BOLD}OpenShip Control Plane${NC}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Mode"        "$mode_label"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Host control"  "$hc_label"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Hostname"     "${HOSTNAME_INPUT}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Timezone"     "${TIMEZONE_INPUT}"
+    printf "  ${DIM}%-18s${NC}  %s:%s\n" "SSH"       "${ADMIN_USER_INPUT}" "${SSH_PORT_INPUT}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "UFW"          "${ENABLE_UFW}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Fail2ban"     "${ENABLE_FAIL2BAN}"
+    printf "  ${DIM}%-18s${NC}  %s GB\n" "Swap"       "${SWAP_SIZE_GB:-2}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Domain"       "$domain_label"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Edge"         "$edge_label"
     echo
-    echo "Installation mode:"
-    echo "  ${INSTALL_MODE}"
-    echo
-    echo "Hostname:"
-    echo "  ${HOSTNAME_INPUT}"
-    echo
-    echo "Timezone:"
-    echo "  ${TIMEZONE_INPUT}"
-    echo
-    echo "SSH:"
-    echo "  Port: ${SSH_PORT_INPUT}"
-    echo "  User: ${ADMIN_USER_INPUT}"
-    echo
-    echo "Firewall:"
-    echo "  UFW: ${ENABLE_UFW}"
-    echo
-    echo "Fail2ban:"
-    echo "  SSH: ${ENABLE_FAIL2BAN}"
-    echo
-    echo "Swap:"
-    echo "  ${SWAP_SIZE_GB:-2} GB: ${ENABLE_SWAP}"
-    echo
-    echo "Installer state:"
-    echo "  ${STATE_FILE}"
-    echo
-    echo "Installer log:"
-    echo "  ${LOG_FILE}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "State file"   "${STATE_FILE}"
+    printf "  ${DIM}%-18s${NC}  %s\n" "Install log"  "${LOG_FILE}"
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        echo -e "${GREEN}OpenShip is configured in BARE mode with --no-host-control.${NC}"
         if [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
-            echo -e "OpenShip Edge (:80/:443) routes: ${BOLD}${OPENSHIP_PUBLIC_URL}${NC}"
+            success "OpenShip Bare  →  ${OPENSHIP_PUBLIC_URL}"
+        else
+            success "OpenShip Bare  →  http://localhost:3001  (private)"
         fi
     else
-        echo -e "${GREEN}OpenShip is configured in STANDARD Docker mode.${NC}"
+        success "OpenShip Standard (Docker Compose)"
     fi
 
     echo
-    echo -e "${BOLD}${CYAN}Architecture Notice:${NC}"
-    echo "  This VPS is strictly a Control Plane. Remote deployment servers"
-    echo "  (e.g. for Laravel/CRM) must be added via 'openship server add'."
-    echo "  This server is NEVER in the HTTP path of production applications."
+    echo -e "  ${DIM}This VPS is strictly a Control Plane. Remote deployment servers${NC}"
+    echo -e "  ${DIM}are added via 'openship server add'. Never deploy apps here.${NC}"
     echo
 }
 
@@ -1559,15 +1561,13 @@ main() {
 
     echo
     echo -e "${BOLD}${CYAN}"
-    echo "============================================================"
-    echo "        OpenShip Control Plane Installer"
-    echo "        Version ${SCRIPT_VERSION}"
-    echo "============================================================"
+    echo   "  ╔══════════════════════════════════════════════════════╗"
+    echo   "  ║                                                      ║"
+    printf "  ║   ⚓  %-46s  ║\n" "OpenShip Control Plane Installer"
+    printf "  ║   %-48s  ║\n" "Version ${SCRIPT_VERSION}  ·  Ubuntu 24.04 LTS"
+    echo   "  ║                                                      ║"
+    echo   "  ╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
-
-    echo
-    echo "Supported OS: Ubuntu 24.04 LTS"
-    echo
 
     require_root
 
