@@ -22,7 +22,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.4.0"
 readonly OPENSHIP_INSTALL_URL="https://get.openship.io"
 
 readonly LOG_FILE="/var/log/openship-control-install.log"
@@ -455,7 +455,7 @@ collect_bare_openship_credentials() {
         reachability="${reachability:-1}"
         case "$reachability" in
             1)
-                OPENSHIP_DOMAIN_KIND="custom"
+                OPENSHIP_DOMAIN_KIND="byo"
                 OPENSHIP_EDGE_ENABLED="true"
                 while true; do
                     OPENSHIP_HOST="$(ask_default "OpenShip domain (e.g. os.example.com)" "")"
@@ -474,6 +474,52 @@ collect_bare_openship_credentials() {
                 ;;
             3)
                 die "Installation cancelled."
+                ;;
+            *)
+                echo "Invalid choice."
+                ;;
+        esac
+    done
+
+    echo
+
+    # ------------------------------------------------------------------
+    # Host control mode
+    # ------------------------------------------------------------------
+    echo -e "${BOLD}OpenShip Host Control Mode${NC}"
+    echo
+    echo "OpenShip can optionally manage the Control VPS itself as a server."
+    echo "This affects whether the built-in terminal (in the dashboard) can"
+    echo "connect to this VPS and whether OpenShip lists it in the server view."
+    echo
+    echo "  1) Full control (Recommended for most setups)"
+    echo "     OpenShip registers this VPS as a managed server."
+    echo "     Dashboard terminal → Control VPS works."
+    echo "     OpenShip may perform host-level operations (SSH key, process mgmt)."
+    echo "     This is how version 2.1.2 worked (last known-good version)."
+    echo
+    echo "  2) Strict isolation (--no-host-control)"
+    echo "     OpenShip does NOT register this VPS as a server."
+    echo "     Dashboard terminal → Control VPS is BLOCKED."
+    echo "     No host-level SSH keys or daemons are created."
+    echo "     Use if this VPS must be invisible to the OpenShip server list."
+    echo
+
+    OPENSHIP_NO_HOST_CONTROL="false"
+
+    while true; do
+        read -r -p "Select [1]: " hc_choice </dev/tty
+        hc_choice="${hc_choice:-1}"
+        case "$hc_choice" in
+            1)
+                OPENSHIP_NO_HOST_CONTROL="false"
+                success "Host control: ENABLED — terminal to Control VPS will work."
+                break
+                ;;
+            2)
+                OPENSHIP_NO_HOST_CONTROL="true"
+                warn "Host control: DISABLED — dashboard terminal to this VPS will not work."
+                break
                 ;;
             *)
                 echo "Invalid choice."
@@ -590,6 +636,7 @@ OPENSHIP_DOMAIN_KIND=${OPENSHIP_DOMAIN_KIND:-none}
 OPENSHIP_HOST=${OPENSHIP_HOST:-}
 OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL:-}
 OPENSHIP_EDGE_ENABLED=${OPENSHIP_EDGE_ENABLED:-false}
+OPENSHIP_NO_HOST_CONTROL=${OPENSHIP_NO_HOST_CONTROL:-false}
 EOF
 
     chmod 600 "$STATE_FILE"
@@ -869,12 +916,19 @@ configure_ufw() {
     ufw allow "${SSH_PORT_INPUT}/tcp" \
         comment "SSH"
 
-    # OpenShip Edge (:80/:443)
-    ufw allow 80/tcp \
-        comment "OpenShip HTTP"
+    # OpenShip Edge (:80/:443) — only when Edge container is enabled.
+    # In Private mode (no Edge), only SSH is exposed.
+    if [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
+        ufw allow 80/tcp \
+            comment "OpenShip Edge HTTP (ACME + proxy)"
 
-    ufw allow 443/tcp \
-        comment "OpenShip HTTPS"
+        ufw allow 443/tcp \
+            comment "OpenShip Edge HTTPS"
+
+        log "UFW: opened :80 (ACME challenge) and :443 (Edge TLS) for OpenShip Edge."
+    else
+        log "UFW: Private mode — :80/:443 NOT opened (no Edge container)."
+    fi
 
     # IMPORTANT:
     # Dashboard :3001 and API :4000 are intentionally NOT exposed externally.
@@ -1121,17 +1175,28 @@ run_bare_openship_setup() {
         up
         --bare
         --non-interactive
-        --no-host-control
         --admin-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
         --admin-name "$OPENSHIP_ADMIN_NAME_INPUT"
         --domain-kind "$OPENSHIP_DOMAIN_KIND"
     )
 
-    if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
+    # --no-host-control: prevents OpenShip from registering this VPS as a
+    # managed server. Blocks dashboard terminal to Control VPS.
+    # User chose this during configuration.
+    if [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" == "true" ]]; then
+        args+=( --no-host-control )
+        log "--no-host-control is ENABLED: Control VPS will not appear as a server."
+    else
+        log "--no-host-control is DISABLED: Control VPS terminal will be accessible."
+    fi
+
+    if [[ "$OPENSHIP_DOMAIN_KIND" == "byo" ]]; then
+        # byo = Bring Your Own ingress (Cloudflare / reverse proxy handles TLS).
+        # OpenShip seeds the domain with externalIngress=true, sslStatus=external.
+        # Do NOT pass --edge takeover — that triggers Docker edge container routines.
         args+=(
             --hostname "$OPENSHIP_HOST"
             --public-url "$OPENSHIP_PUBLIC_URL"
-            --edge takeover
         )
     fi
 
@@ -1158,6 +1223,7 @@ run_openship_setup() {
         echo "The interactive guided wizard will NOT be used."
         echo
         run_bare_openship_setup
+        wait_for_api_healthy
         return
     fi
 
@@ -1176,6 +1242,56 @@ run_openship_setup() {
     echo
 
     openship </dev/tty >/dev/tty 2>/dev/tty
+}
+
+# ------------------------------------------------------------------------------
+# API health-check & rollback
+# ------------------------------------------------------------------------------
+
+rollback_bare_openship() {
+    echo
+    warn "Rolling back OpenShip Bare service..."
+
+    systemctl stop openship 2>/dev/null || true
+    openship stop 2>/dev/null || true
+
+    echo
+    warn "Last 50 lines from openship logs:"
+    echo "--------------------------------------"
+    openship logs --tail 50 2>/dev/null || journalctl -u openship -n 50 --no-pager 2>/dev/null || true
+    echo "--------------------------------------"
+    echo
+
+    die "OpenShip API did not become healthy. See logs above and ${LOG_FILE}."
+}
+
+wait_for_api_healthy() {
+    if [[ "$INSTALL_MODE" != "bare" ]]; then
+        return
+    fi
+
+    section "OpenShip API health-check"
+
+    local api_port=4000
+    local retries=30
+    local interval=10
+    local attempt=0
+
+    log "Polling http://localhost:${api_port}/ — up to $((retries * interval / 60)) minutes..."
+
+    while (( attempt < retries )); do
+        attempt=$(( attempt + 1 ))
+
+        if curl -fsS --max-time 5 "http://localhost:${api_port}/" >/dev/null 2>&1; then
+            success "OpenShip API is healthy (attempt ${attempt}/${retries})."
+            return
+        fi
+
+        log "Attempt ${attempt}/${retries}: API not ready yet, waiting ${interval}s..."
+        sleep "$interval"
+    done
+
+    rollback_bare_openship
 }
 
 # ------------------------------------------------------------------------------
