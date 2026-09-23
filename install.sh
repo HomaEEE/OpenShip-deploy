@@ -597,7 +597,6 @@ collect_bare_openship_credentials() {
     echo "     OpenShip registers this VPS as a managed server."
     echo "     Dashboard terminal → Control VPS works."
     echo "     OpenShip may perform host-level operations (SSH key, process mgmt)."
-    echo "     This is how version 2.1.2 worked (last known-good version)."
     echo
     echo "  2) Strict isolation (--no-host-control)"
     echo "     OpenShip does NOT register this VPS as a server."
