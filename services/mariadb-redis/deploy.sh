@@ -437,6 +437,148 @@ configure_firewall() {
 }
 
 # ------------------------------------------------------------------------------
+# System and Kernel Tuning (MariaDB + Redis)
+# ------------------------------------------------------------------------------
+
+configure_swap() {
+    section "Swap configuration"
+
+    if [[ "${SKIP_TUNING:-false}" == "true" || "${SKIP_TUNING:-0}" == "1" ]]; then
+        log "Skipping swap configuration (SKIP_TUNING is active)."
+        return
+    fi
+
+    if swapon --show 2>/dev/null | grep -q .; then
+        success "Swap is already active:"
+        swapon --show
+        return
+    fi
+
+    local mem_total_kb
+    mem_total_kb="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 2097152)"
+    local mem_total_gb=$(( mem_total_kb / 1048576 ))
+
+    local swap_gb=2
+    if (( mem_total_gb > 4 )); then
+        swap_gb=4
+    fi
+
+    log "Host RAM: ~${mem_total_gb} GB. Creating ${swap_gb} GB swapfile..."
+
+    if [[ ! -f /swapfile ]]; then
+        if ! fallocate -l "${swap_gb}G" /swapfile 2>/dev/null; then
+            warn "fallocate failed, creating swapfile with dd..."
+            dd if=/dev/zero of=/swapfile bs=1M count="$(( swap_gb * 1024 ))" status=progress
+        fi
+        chmod 600 /swapfile
+        mkswap /swapfile
+    fi
+
+    if ! swapon /swapfile 2>/dev/null; then
+        warn "swapon failed (possibly running inside unprivileged container or unsupported filesystem)."
+        warn "Continuing without swap."
+        return
+    fi
+
+    if ! grep -qE '^/swapfile[[:space:]]' /etc/fstab; then
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+
+    success "${swap_gb} GB swap configured and active."
+}
+
+optimize_system() {
+    section "Kernel & System Limits Tuning (MariaDB + Redis)"
+
+    if [[ "${SKIP_TUNING:-false}" == "true" || "${SKIP_TUNING:-0}" == "1" ]]; then
+        log "Skipping system tuning (SKIP_TUNING is active)."
+        return
+    fi
+
+    log "Applying sysctl optimizations for MariaDB and Redis..."
+    mkdir -p /etc/sysctl.d 2>/dev/null || true
+    cat > /etc/sysctl.d/99-openship-mariadb-redis.conf <<'EOF'
+# Redis requirements
+vm.overcommit_memory = 1
+net.core.somaxconn = 4096
+
+# MariaDB & Redis memory & swap tuning
+vm.swappiness = 1
+vm.vfs_cache_pressure = 50
+
+# MariaDB InnoDB AIO and file limits
+fs.aio-max-nr = 1048576
+fs.file-max = 2097152
+
+# TCP connection tuning
+net.ipv4.tcp_max_syn_backlog = 4096
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_tw_reuse = 1
+EOF
+
+    # Apply sysctl, safe fallback if inside container or virtualized
+    sysctl -p /etc/sysctl.d/99-openship-mariadb-redis.conf >> "$LOG_FILE" 2>&1 || {
+        warn "sysctl command failed (possibly restricted permissions in container). Continuing."
+    }
+
+    log "Configuring file descriptor limits (nofile 65535)..."
+    mkdir -p /etc/security/limits.d 2>/dev/null || true
+    cat > /etc/security/limits.d/99-openship-services.conf <<'EOF'
+* soft nofile 65535
+* hard nofile 65535
+root soft nofile 65535
+root hard nofile 65535
+EOF
+
+    success "Kernel parameters and ulimits configured."
+}
+
+configure_thp() {
+    section "Transparent Huge Pages (THP) Tuning"
+
+    if [[ "${SKIP_TUNING:-false}" == "true" || "${SKIP_TUNING:-0}" == "1" ]]; then
+        log "Skipping THP tuning (SKIP_TUNING is active)."
+        return
+    fi
+
+    log "Configuring Transparent Huge Pages for Redis latency prevention..."
+
+    # Apply immediately at runtime if sysfs node is available
+    if [[ -w /sys/kernel/mm/transparent_hugepage/enabled ]]; then
+        echo madvise > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || \
+        echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+    fi
+
+    if [[ -w /sys/kernel/mm/transparent_hugepage/defrag ]]; then
+        echo madvise > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || \
+        echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
+    fi
+
+    # Create systemd service for persistence across reboots
+    if command_exists systemctl && [[ -d /etc/systemd/system ]]; then
+        cat > /etc/systemd/system/disable-thp.service <<'EOF'
+[Unit]
+Description=Disable Transparent Huge Pages for Redis/Databases
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'if test -w /sys/kernel/mm/transparent_hugepage/enabled; then echo madvise > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || echo never > /sys/kernel/mm/transparent_hugepage/enabled; fi; if test -w /sys/kernel/mm/transparent_hugepage/defrag; then echo madvise > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || echo never > /sys/kernel/mm/transparent_hugepage/defrag; fi'
+
+[Install]
+WantedBy=basic.target
+EOF
+        systemctl daemon-reload >> "$LOG_FILE" 2>&1 || true
+        systemctl enable disable-thp.service >> "$LOG_FILE" 2>&1 || true
+        success "THP tuning applied and persisted via disable-thp.service."
+    else
+        success "THP runtime tuning applied."
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Compose Operations
 # ------------------------------------------------------------------------------
 
@@ -587,6 +729,8 @@ Options:
   --stop          Stop and remove containers (data volumes preserved)
   --logs          Follow container logs in real time
   --pull          Pull updated Docker images and recreate containers
+  --skip-tuning   Skip server optimization (swap, sysctl, THP, ulimits)
+  --prepare-host  Tune host only (swap, sysctl, THP, network) without starting containers
   --help, -h      Display this help message
 
 Environment variables:
@@ -595,6 +739,7 @@ Environment variables:
   MARIADB_PORT            Host port for MariaDB (default: 3306)
   REDIS_PORT              Host port for Redis (default: 6379)
   UFW_ALLOW_IPS           Allowed IP list or "any" for firewall
+  SKIP_TUNING             Set to 1 or true to skip server optimization
   NON_INTERACTIVE         Set to 1 or true for non-interactive execution
 EOF
 }
@@ -613,7 +758,7 @@ main() {
     require_root
 
     # Command line argument handling
-    if [[ $# -gt 0 ]]; then
+    while [[ $# -gt 0 ]]; do
         case "$1" in
             --status)
                 show_status
@@ -636,6 +781,22 @@ main() {
                 start_services
                 exit 0
                 ;;
+            --skip-tuning)
+                export SKIP_TUNING=true
+                shift
+                ;;
+            --prepare-host|--tune-only)
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                section "Preparing Host for OpenShip Control Panel Deployment"
+                check_and_install_docker
+                ensure_docker_running
+                ensure_docker_network
+                configure_swap
+                optimize_system
+                configure_thp
+                success "Host optimization complete. Ready for OpenShip UI stack deployment."
+                exit 0
+                ;;
             *)
                 error "Unknown argument: $1"
                 echo
@@ -643,7 +804,7 @@ main() {
                 exit 1
                 ;;
         esac
-    fi
+    done
 
     # Default flow: Full setup / deploy
     exec > >(tee -a "$LOG_FILE") 2>&1
@@ -656,6 +817,10 @@ main() {
 
     configure_environment
     configure_firewall
+
+    configure_swap
+    optimize_system
+    configure_thp
 
     start_services
     print_summary
