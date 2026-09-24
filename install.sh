@@ -495,7 +495,7 @@ collect_cloudflare_origin_credentials() {
     local key_file="/etc/caddy/certs/${domain}.key"
 
     mkdir -p /etc/caddy/certs
-    chmod 700 /etc/caddy/certs
+    chmod 755 /etc/caddy/certs
 
     echo
     echo "Provide Cloudflare Origin Certificate & Private Key for ${domain}:"
@@ -1734,6 +1734,10 @@ configure_caddy() {
     local tls_directive=""
     if [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_origin" && -n "${CADDY_ORIGIN_CERT_PATH:-}" && -f "${CADDY_ORIGIN_CERT_PATH:-}" && -n "${CADDY_ORIGIN_KEY_PATH:-}" && -f "${CADDY_ORIGIN_KEY_PATH:-}" ]]; then
         tls_directive="    tls ${CADDY_ORIGIN_CERT_PATH} ${CADDY_ORIGIN_KEY_PATH}"
+        chown -R caddy:caddy /etc/caddy/certs 2>/dev/null || true
+        chmod 755 /etc/caddy/certs 2>/dev/null || true
+        chmod 644 /etc/caddy/certs/*.crt 2>/dev/null || true
+        chmod 640 /etc/caddy/certs/*.key 2>/dev/null || true
     fi
 
     run_task "Configuring Caddyfile (${OPENSHIP_HOST} -> :3001)" bash -c "
@@ -1744,9 +1748,7 @@ ${tls_directive}
     reverse_proxy 127.0.0.1:3001 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
         header_up X-Forwarded-Proto https
-        header_up X-Forwarded-Host {host}
     }
 }
 EOF
