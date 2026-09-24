@@ -675,15 +675,18 @@ collect_bare_openship_credentials() {
                 OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
 
                 echo
-                echo "Caddy SSL certificate mode for ${OPENSHIP_HOST}:"
+                echo "Caddy proxy / SSL mode for ${OPENSHIP_HOST}:"
                 echo
-                echo "  1) Automatic Let's Encrypt / ZeroSSL (Standard Caddy auto-TLS)"
-                echo "     Caddy requests and renews certificates via ACME HTTP-01."
-                echo "     Works with Cloudflare if proxy is bypassed or HTTP-01 is allowed."
+                echo "  1) Cloudflare Flexible mode (Recommended if Cloudflare is in Flexible)"
+                echo "     Caddy listens on HTTP (:80), no SSL certificates needed on server."
+                echo "     Cloudflare handles HTTPS for clients. Zero maintenance, no redirect loops."
                 echo
-                echo "  2) Cloudflare Origin CA certificate (Recommended for Cloudflare Full / Full strict)"
+                echo "  2) Cloudflare Origin CA certificate (For Cloudflare Full / Full strict)"
                 echo "     Paste your 15-year Origin Certificate from Cloudflare Dashboard."
-                echo "     Immune to ACME challenges, rate limits, and redirect loops."
+                echo "     Immune to ACME challenges and rate limits."
+                echo
+                echo "  3) Automatic Let's Encrypt / ZeroSSL (Standard Caddy auto-TLS)"
+                echo "     Caddy requests and renews certificates via ACME HTTP-01."
                 echo
 
                 while true; do
@@ -692,6 +695,16 @@ collect_bare_openship_credentials() {
                     ssl_choice="${ssl_choice:-1}"
                     case "$ssl_choice" in
                         1)
+                            CADDY_SSL_MODE="cloudflare_flexible"
+                            success "Caddy mode: Cloudflare Flexible (HTTP :80, no local SSL)."
+                            break
+                            ;;
+                        2)
+                            CADDY_SSL_MODE="cloudflare_origin"
+                            collect_cloudflare_origin_credentials "$OPENSHIP_HOST"
+                            break
+                            ;;
+                        3)
                             CADDY_SSL_MODE="auto"
                             success "Caddy SSL: Automatic Let's Encrypt."
                             echo
@@ -700,11 +713,6 @@ collect_bare_openship_credentials() {
                             echo -e "  ${DIM}temporarily set to 'DNS only' (gray cloud) so Let's Encrypt can verify.${NC}"
                             echo -e "  ${DIM}You can switch back to 'Proxied' + Full (strict) immediately after install.${NC}"
                             echo
-                            break
-                            ;;
-                        2)
-                            CADDY_SSL_MODE="cloudflare_origin"
-                            collect_cloudflare_origin_credentials "$OPENSHIP_HOST"
                             break
                             ;;
                         *)
@@ -1731,8 +1739,12 @@ configure_caddy() {
         success "Caddy is already installed."
     fi
 
+    local site_address="${OPENSHIP_HOST}"
     local tls_directive=""
-    if [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_origin" && -n "${CADDY_ORIGIN_CERT_PATH:-}" && -f "${CADDY_ORIGIN_CERT_PATH:-}" && -n "${CADDY_ORIGIN_KEY_PATH:-}" && -f "${CADDY_ORIGIN_KEY_PATH:-}" ]]; then
+
+    if [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_flexible" ]]; then
+        site_address="http://${OPENSHIP_HOST}"
+    elif [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_origin" && -n "${CADDY_ORIGIN_CERT_PATH:-}" && -f "${CADDY_ORIGIN_CERT_PATH:-}" && -n "${CADDY_ORIGIN_KEY_PATH:-}" && -f "${CADDY_ORIGIN_KEY_PATH:-}" ]]; then
         tls_directive="    tls ${CADDY_ORIGIN_CERT_PATH} ${CADDY_ORIGIN_KEY_PATH}"
         chown -R caddy:caddy /etc/caddy/certs 2>/dev/null || true
         chmod 755 /etc/caddy/certs 2>/dev/null || true
@@ -1740,10 +1752,10 @@ configure_caddy() {
         chmod 640 /etc/caddy/certs/*.key 2>/dev/null || true
     fi
 
-    run_task "Configuring Caddyfile (${OPENSHIP_HOST} -> :3001)" bash -c "
+    run_task "Configuring Caddyfile (${site_address} -> :3001)" bash -c "
         mkdir -p /etc/caddy
         cat > /etc/caddy/Caddyfile <<EOF
-${OPENSHIP_HOST} {
+${site_address} {
 ${tls_directive}
     reverse_proxy 127.0.0.1:3001 {
         header_up Host {host}
@@ -1756,7 +1768,7 @@ EOF
         systemctl restart caddy
     "
 
-    success "Caddy configured and running for https://${OPENSHIP_HOST}"
+    success "Caddy configured and running for ${OPENSHIP_PUBLIC_URL}"
 }
 
 # ------------------------------------------------------------------------------
@@ -1807,7 +1819,9 @@ print_summary() {
     local mode_label="${INSTALL_MODE^^}"
     local proxy_label="none"
     if [[ "${OPENSHIP_PROXY_MODE:-none}" == "caddy" ]]; then
-        if [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_origin" ]]; then
+        if [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_flexible" ]]; then
+            proxy_label="Caddy (Cloudflare Flexible / HTTP :80)"
+        elif [[ "${CADDY_SSL_MODE:-auto}" == "cloudflare_origin" ]]; then
             proxy_label="Caddy (Cloudflare Origin CA)"
         else
             proxy_label="Caddy (Let's Encrypt HTTPS)"
