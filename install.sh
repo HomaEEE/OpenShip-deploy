@@ -1120,6 +1120,7 @@ install_and_update_packages() {
         jq \
         unzip \
         rsync \
+        btop \
         nano \
         lsof \
         procps \
