@@ -1098,15 +1098,19 @@ configure_timezone() {
 }
 
 # ------------------------------------------------------------------------------
-# Base packages
+# System packages & update
 # ------------------------------------------------------------------------------
 
-install_base_packages() {
-    section "Base packages"
+install_and_update_packages() {
+    section "System packages & update"
 
     export DEBIAN_FRONTEND=noninteractive
 
     run_task "Updating package lists" apt-get update -qq
+
+    run_task "Upgrading system packages" env DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold"
 
     run_task "Installing base packages" apt-get install -y -qq \
         ca-certificates \
@@ -1116,13 +1120,9 @@ install_base_packages() {
         jq \
         unzip \
         rsync \
-        btop \
         nano \
-        vim \
-        ncdu \
         lsof \
         procps \
-        net-tools \
         dnsutils \
         openssl \
         ufw \
@@ -1130,23 +1130,7 @@ install_base_packages() {
         unattended-upgrades \
         systemd-timesyncd
 
-    run_task "Cleaning up unused packages" apt-get autoremove -y -qq
-}
-
-# ------------------------------------------------------------------------------
-# System update
-# ------------------------------------------------------------------------------
-
-update_system() {
-    section "System update"
-
-    run_task "Updating package lists" apt-get update -qq
-
-    run_task "Upgrading system packages" env DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
-        -o Dpkg::Options::="--force-confdef" \
-        -o Dpkg::Options::="--force-confold"
-
-    run_task "Cleaning up package cache" bash -c "apt-get autoremove -y -qq && apt-get clean -qq"
+    run_task "Cleaning up unused packages" bash -c "apt-get autoremove -y -qq && apt-get clean -qq"
 
     if [[ -f /var/run/reboot-required ]]; then
         warn "A system restart is recommended after kernel/library updates."
@@ -1215,7 +1199,11 @@ configure_swap() {
         mkswap /swapfile
     fi
 
-    swapon /swapfile
+    if ! swapon /swapfile 2>/dev/null; then
+        warn "swapon failed (possibly running inside container or unsupported filesystem)."
+        warn "Continuing without swap."
+        return
+    fi
 
     if ! grep -qE '^/swapfile[[:space:]]' /etc/fstab; then
         echo '/swapfile none swap sw 0 0' >> /etc/fstab
@@ -1314,7 +1302,7 @@ EOF
 
     sshd -t
 
-    systemctl reload ssh
+    systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 
     success "SSH configuration validated."
 }
@@ -1726,8 +1714,7 @@ configure_caddy() {
 
     if ! command_exists caddy; then
         run_task "Adding Caddy repository" bash -c "
-            apt-get update -qq
-            apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+            apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
             rm -f /etc/apt/sources.list.d/caddy-stable.sources
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes 2>/dev/null || true
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
@@ -1766,6 +1753,17 @@ ${tls_directive}
 EOF
         systemctl enable caddy
         systemctl restart caddy
+    "
+
+    run_task "Verifying Caddy service health" bash -c "
+        for i in {1..5}; do
+            if systemctl is-active --quiet caddy; then
+                exit 0
+            fi
+            sleep 1
+        done
+        journalctl -u caddy --no-pager -n 20
+        exit 1
     "
 
     success "Caddy configured and running for ${OPENSHIP_PUBLIC_URL}"
@@ -1911,8 +1909,7 @@ main() {
     configure_hostname
     configure_timezone
 
-    install_base_packages
-    update_system
+    install_and_update_packages
     optimize_system
 
     configure_swap
