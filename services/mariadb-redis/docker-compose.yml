@@ -1,7 +1,7 @@
 services:
   mariadb:
     image: mariadb:${MARIADB_VERSION:-11.4}
-    container_name: openship-mariadb
+    container_name: mariadb
     restart: unless-stopped
     networks:
       default:
@@ -28,7 +28,7 @@ services:
 
   redis:
     image: redis:${REDIS_VERSION:-7.4-alpine}
-    container_name: openship-redis
+    container_name: redis
     restart: unless-stopped
     networks:
       default:
@@ -54,10 +54,10 @@ services:
 
 volumes:
   mariadb_data:
-    name: openship_mariadb_data
+    name: mariadb_data
   redis_data:
-    name: openship_redis_data
+    name: redis_data
 
 networks:
   default:
-    name: openship-network
+    name: default
