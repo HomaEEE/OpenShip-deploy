@@ -558,17 +558,17 @@ collect_cloudflare_origin_credentials() {
             : > "$key_file"
             while IFS= read -r line </dev/tty; do
                 echo "$line" >> "$key_file"
-                if [[ "$line" == *"KEY-----"* ]]; then
+                if [[ "$line" == *"END "* && "$line" == *"KEY-----"* ]]; then
                     break
                 fi
             done
-            chmod 600 "$key_file"
+            chmod 640 "$key_file"
 
-            if grep -q "BEGIN" "$key_file" && grep -q "KEY" "$key_file"; then
+            if grep -q "BEGIN" "$key_file" && grep -q "END" "$key_file" && grep -q "KEY" "$key_file"; then
                 success "Private key captured."
                 break
             fi
-            warn "Invalid private key: missing 'BEGIN' or 'KEY' markers. Try again."
+            warn "Invalid private key: missing 'BEGIN' or 'END' markers. Try again."
         done
     fi
 
