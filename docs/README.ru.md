@@ -137,31 +137,101 @@ networks:
     external: true
 ```
 
-### Создание базы данных и пользователя под проект
+### Переменные окружения проекта
 
-```bash
-# Через аргументы
-sudo ./create-project-db.sh --database=my_app --user=my_user --password=secret
-
-# Или автоматически из .env проекта
-sudo ./create-project-db.sh --env-file=/var/www/my-app/.env
-```
-
-### Переменные окружения (.env)
+В настройках OpenShip или в `.env` проекта укажите:
 
 ```env
+# MariaDB (подключение к общему контейнеру mariadb)
 DB_CONNECTION=mysql
 DB_HOST=mariadb
 DB_PORT=3306
-DB_DATABASE=my_app
-DB_USERNAME=my_user
-DB_PASSWORD=secret
+DB_DATABASE=noire
+DB_USERNAME=noire
+DB_PASSWORD=your_project_password
+DB_ROOT_PASSWORD=your_mariadb_root_password    # Передается единоразово при создании БД
 
+# Redis (подключение к общему контейнеру redis)
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_CLIENT=phpredis
 REDIS_PASSWORD=your_redis_password
-CACHE_PREFIX=my_app_
+CACHE_PREFIX=noire_
+```
+
+### Пример `entrypoint.sh` проекта (FrankenPHP + Laravel)
+
+Контейнер проекта автоматически создает БД при первом старте (если передан `DB_ROOT_PASSWORD`), ожидает готовности СУБД, накатывает миграции и стартует FrankenPHP:
+
+```bash
+#!/usr/bin/env bash
+set -e
+
+# 1. Ожидание доступности MariaDB и Redis
+echo "Waiting for MariaDB and Redis..."
+php -r '
+  $host = getenv("DB_HOST") ?: "mariadb";
+  $port = getenv("DB_PORT") ?: 3306;
+  $redisHost = getenv("REDIS_HOST") ?: "redis";
+  $redisPort = getenv("REDIS_PORT") ?: 6379;
+
+  for ($i = 0; $i < 30; $i++) {
+    $dbOk = @fsockopen($host, (int)$port, $errno, $errstr, 1);
+    $redisOk = @fsockopen($redisHost, (int)$redisPort, $errno, $errstr, 1);
+    if ($dbOk && $redisOk) {
+      fclose($dbOk);
+      fclose($redisOk);
+      exit(0);
+    }
+    if ($dbOk) fclose($dbOk);
+    if ($redisOk) fclose($redisOk);
+    sleep(1);
+  }
+  fwrite(STDERR, "Database or Redis not reachable after 30s\n");
+  exit(1);
+'
+
+# 2. Создание БД и пользователя при передаче DB_ROOT_PASSWORD
+if [ -n "${DB_ROOT_PASSWORD:-}" ]; then
+  echo "Provisioning database '${DB_DATABASE}' via root credentials..."
+  php -r '
+    $host = getenv("DB_HOST") ?: "mariadb";
+    $port = getenv("DB_PORT") ?: 3306;
+    $rootPass = getenv("DB_ROOT_PASSWORD");
+    $dbName = getenv("DB_DATABASE");
+    $dbUser = getenv("DB_USERNAME");
+    $dbPass = getenv("DB_PASSWORD");
+
+    try {
+      $pdo = new PDO("mysql:host={$host};port={$port}", "root", $rootPass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+      ]);
+      $pdo->exec("CREATE DATABASE IF NOT EXISTS \`{$dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+      if ($dbUser && $dbUser !== "root") {
+        $pdo->exec("CREATE USER IF NOT EXISTS \x27{$dbUser}\x27@\x27%\x27 IDENTIFIED BY \x27{$dbPass}\x27");
+        $pdo->exec("ALTER USER \x27{$dbUser}\x27@\x27%\x27 IDENTIFIED BY \x27{$dbPass}\x27");
+        $pdo->exec("GRANT ALL PRIVILEGES ON \`{$dbName}\`.* TO \x27{$dbUser}\x27@\x27%\x27");
+        $pdo->exec("FLUSH PRIVILEGES");
+      }
+      echo "Database and user ensured.\n";
+    } catch (Exception $e) {
+      fwrite(STDERR, "DB setup error: " . $e->getMessage() . "\n");
+      exit(1);
+    }
+  '
+  # Удаляем пароль root из памяти процесса воркеров
+  unset DB_ROOT_PASSWORD
+fi
+
+# 3. Подготовка Laravel
+php artisan storage:link --no-interaction || true
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan migrate --force
+
+# 4. Запуск FrankenPHP
+exec frankenphp run --config /etc/caddy/Caddyfile
 ```
 
 ### Управление стеком

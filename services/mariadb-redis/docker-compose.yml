@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      MARIADB_ROOT_HOST: "%"
     volumes:
       - mariadb_data:/var/lib/mysql
       - ./config/mariadb/my.cnf:/etc/mysql/conf.d/custom.cnf:ro

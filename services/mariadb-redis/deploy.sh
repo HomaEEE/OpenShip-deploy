@@ -252,12 +252,13 @@ print_summary() {
 
     section "Ready! How to connect projects"
 
-    echo -e "${BOLD}1. Attach project docker-compose.yml to the network:${NC}"
+    echo -e "${BOLD}1. Attach project container to the Docker network:${NC}"
     echo "------------------------------------------------------------"
     cat <<'EOF'
+# In project docker-compose.yml:
 services:
   app:
-    # ... your app definition ...
+    # ...
     networks:
       - default
 
@@ -268,30 +269,29 @@ networks:
 EOF
     echo "------------------------------------------------------------"
     echo
-    echo -e "${BOLD}2. Create a dedicated database for your project:${NC}"
-    echo "   sudo ./create-project-db.sh --database=my_app --user=my_user --password=secret"
-    echo "   OR"
-    echo "   sudo ./create-project-db.sh --env-file=/path/to/project/.env"
-    echo
-    echo -e "${BOLD}3. Project Environment (.env):${NC}"
+    echo -e "${BOLD}2. Project Environment Variables (e.g. OpenShip UI / .env):${NC}"
     echo "------------------------------------------------------------"
     cat <<EOF
 DB_CONNECTION=mysql
 DB_HOST=mariadb
 DB_PORT=3306
-DB_DATABASE=your_db_name
-DB_USERNAME=your_db_user
-DB_PASSWORD=your_db_password
+DB_DATABASE=your_project_db
+DB_USERNAME=root
+DB_PASSWORD=${maria_pass}
+DB_ROOT_PASSWORD=${maria_pass}
 
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=${redis_pass}
-CACHE_PREFIX=app_name_
+CACHE_PREFIX=your_project_
 EOF
     echo "------------------------------------------------------------"
     echo
-    echo -e "Root credentials saved in: ${YELLOW}${ENV_FILE}${NC}"
-    echo "Root MariaDB Password: ${maria_pass}"
+    echo -e "${BOLD}Services credentials saved in:${NC} ${YELLOW}${ENV_FILE}${NC}"
+    echo "MariaDB Host:          mariadb:3306"
+    echo "MariaDB Root Password: ${maria_pass}"
+    echo "Redis Host:            redis:6379"
+    echo "Redis Password:        ${redis_pass}"
 }
 
 show_help() {
