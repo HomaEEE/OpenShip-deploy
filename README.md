@@ -154,20 +154,33 @@ networks:
     external: true
 ```
 
-### Environment variables
+### Provision project database & user
+
+Create an isolated database and user for each project:
+
+```bash
+# Via flags
+sudo ./create-project-db.sh --database=my_app --user=my_user --password=secret
+
+# Or automatically from project .env
+sudo ./create-project-db.sh --env-file=/var/www/my-app/.env
+```
+
+### Environment variables (.env)
 
 ```env
+DB_CONNECTION=mysql
 DB_HOST=mariadb
 DB_PORT=3306
-DB_CONNECTION=mysql
-DB_DATABASE=your_project_db
-DB_USERNAME=root
-DB_PASSWORD=your_mariadb_root_password
+DB_DATABASE=my_app
+DB_USERNAME=my_user
+DB_PASSWORD=secret
 
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_CLIENT=phpredis
 REDIS_PASSWORD=your_redis_password
+CACHE_PREFIX=my_app_
 ```
 
 ### Stack management

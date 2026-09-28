@@ -104,15 +104,15 @@ backup_mariadb() {
     timestamp="$(date +"%Y%m%d_%H%M%S")"
     local output_file
 
-    if ! docker ps --filter "name=openship-mariadb" --filter "status=running" | grep -q openship-mariadb; then
-        error "MariaDB container (openship-mariadb) is not running!"
+    if ! docker ps --filter "name=^mariadb$" --filter "status=running" | grep -q mariadb; then
+        error "MariaDB container (mariadb) is not running!"
         return 1
     fi
 
     if [[ "$target_db" == "all" ]]; then
         output_file="${BACKUP_DIR}/mariadb_all_databases_${timestamp}.sql.gz"
         log "Dumping all MariaDB databases to ${output_file}..."
-        docker exec openship-mariadb mariadb-dump \
+        docker exec mariadb mariadb-dump \
             -u root \
             -p"${MARIADB_ROOT_PASSWORD}" \
             --all-databases \
@@ -122,7 +122,7 @@ backup_mariadb() {
     else
         output_file="${BACKUP_DIR}/mariadb_${target_db}_${timestamp}.sql.gz"
         log "Dumping database '${target_db}' to ${output_file}..."
-        docker exec openship-mariadb mariadb-dump \
+        docker exec mariadb mariadb-dump \
             -u root \
             -p"${MARIADB_ROOT_PASSWORD}" \
             --single-transaction \
@@ -142,23 +142,23 @@ backup_redis() {
     timestamp="$(date +"%Y%m%d_%H%M%S")"
     local output_file="${BACKUP_DIR}/redis_dump_${timestamp}.rdb"
 
-    if ! docker ps --filter "name=openship-redis" --filter "status=running" | grep -q openship-redis; then
-        warn "Redis container (openship-redis) is not running. Skipping Redis backup."
+    if ! docker ps --filter "name=^redis$" --filter "status=running" | grep -q redis; then
+        warn "Redis container (redis) is not running. Skipping Redis backup."
         return 0
     fi
 
     log "Triggering Redis BGSAVE snapshot..."
     if [[ -n "${REDIS_PASSWORD:-}" ]]; then
-        docker exec openship-redis redis-cli -a "${REDIS_PASSWORD}" BGSAVE 2>/dev/null || true
+        docker exec redis redis-cli -a "${REDIS_PASSWORD}" BGSAVE 2>/dev/null || true
     else
-        docker exec openship-redis redis-cli BGSAVE 2>/dev/null || true
+        docker exec redis redis-cli BGSAVE 2>/dev/null || true
     fi
 
     # Wait 2 seconds for BGSAVE to write to disk
     sleep 2
 
     # Copy dump.rdb from container
-    if docker cp openship-redis:/data/dump.rdb "$output_file" 2>/dev/null; then
+    if docker cp redis:/data/dump.rdb "$output_file" 2>/dev/null; then
         chmod 600 "$output_file"
         local size
         size="$(du -h "$output_file" | awk '{print $1}')"

@@ -137,20 +137,31 @@ networks:
     external: true
 ```
 
-### Змінні середовища
+### Створення бази даних та користувача для проєкту
+
+```bash
+# Через аргументи
+sudo ./create-project-db.sh --database=my_app --user=my_user --password=secret
+
+# Або автоматично з .env проєкту
+sudo ./create-project-db.sh --env-file=/var/www/my-app/.env
+```
+
+### Змінні середовища (.env)
 
 ```env
+DB_CONNECTION=mysql
 DB_HOST=mariadb
 DB_PORT=3306
-DB_CONNECTION=mysql
-DB_DATABASE=your_project_db
-DB_USERNAME=root
-DB_PASSWORD=your_mariadb_root_password
+DB_DATABASE=my_app
+DB_USERNAME=my_user
+DB_PASSWORD=secret
 
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_CLIENT=phpredis
 REDIS_PASSWORD=your_redis_password
+CACHE_PREFIX=my_app_
 ```
 
 ### Управління стеком
