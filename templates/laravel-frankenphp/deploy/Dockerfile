@@ -39,7 +39,7 @@ RUN install-php-extensions \
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-WORKDIR /var/www/html
+WORKDIR /app
 
 # Copy configuration
 COPY deploy/Caddyfile /etc/caddy/Caddyfile

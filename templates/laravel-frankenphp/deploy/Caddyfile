@@ -8,7 +8,7 @@
 }
 
 :80 {
-    root * /var/www/html/public
+    root * /app/public
     encode zstd gzip
 
     php_server {
