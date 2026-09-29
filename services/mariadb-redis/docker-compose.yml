@@ -15,7 +15,7 @@ services:
     volumes:
       - mariadb_data:/var/lib/mysql
     networks:
-      default:
+      openship-network:
         aliases:
           - mariadb
     healthcheck:
@@ -42,7 +42,7 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      default:
+      openship-network:
         aliases:
           - redis
     healthcheck:
@@ -59,6 +59,6 @@ volumes:
     name: redis_data
 
 networks:
-  default:
+  openship-network:
     name: openship-network
     external: true
