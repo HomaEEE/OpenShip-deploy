@@ -10,7 +10,7 @@ services:
       - --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-512M}
       - --max-connections=${MARIADB_MAX_CONNECTIONS:-150}
     environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-openship_root_secret}
       MARIADB_ROOT_HOST: "%"
     volumes:
       - mariadb_data:/var/lib/mysql
@@ -32,7 +32,7 @@ services:
     command: >
       sh -c 'exec redis-server
       --bind 0.0.0.0
-      --protected-mode yes
+      --protected-mode no
       --appendonly yes
       --maxmemory ${REDIS_MAXMEMORY:-256mb}
       --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}

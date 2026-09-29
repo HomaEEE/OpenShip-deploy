@@ -1,0 +1,10 @@
+{
+  "name": "laravel-frankenphp",
+  "compose_file": "deploy/docker-compose.yml",
+  "domains": [
+    {
+      "service": "web",
+      "port": 80
+    }
+  ]
+}
