@@ -1,88 +1,263 @@
-# OpenShip — Shared Services (MariaDB + Redis)
+<div align="center">
 
-Репозиторий для развертывания общих сервисов баз данных (**MariaDB 11.4 LTS** и **Redis 7.4 Alpine**) в платформе **OpenShip** с закрытым доступом через единую сеть Docker (`openship-network`).
+# ⚓ OpenShip Deploy
 
-Никаких посторонних сервисов — только база данных и кэш/очереди для ваших проектов.
+**Production-ready provisioning toolkit for [OpenShip](https://openship.io/) Control Plane & Worker Infrastructure**
+
+[![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04_LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![Bash](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![amd64 · arm64](https://img.shields.io/badge/arch-amd64%20·%20arm64-blue)](#requirements)
+[![License MIT](https://img.shields.io/badge/license-MIT-green)](#license)
+
+[🇷🇺 Русский](docs/README.ru.md) · [🇺🇦 Українська](docs/README.ua.md)
+
+</div>
 
 ---
 
-## 🏗 Архитектура
+## Overview
 
+**OpenShip Deploy** is an automated, production-ready toolkit designed for:
+1. **Control Plane Provisioning**: Prepares a clean Ubuntu 24.04 LTS VPS as a dedicated OpenShip Control Plane with security hardening, automated updates, and diagnostics.
+2. **Worker Database Services**: Provides an isolated, pre-tuned **MariaDB 11.4 LTS + Redis 7.4 Alpine** stack accessible exclusively via the internal Docker network (`openship-network`).
+3. **Application Templates**: Includes a production-ready **Laravel + FrankenPHP** template with auto-provisioning databases, zero-config migrations, and OpenShip domain routing.
+
+---
+
+## Architecture
+
+```text
+                    Internet
+                       │
+                   Cloudflare
+                       │
+       ┌───────────────┴───────────────┐
+       │                               │
+ os.example.com                   noire.od.ua (apps)
+       │                               │
+  Control VPS                      Prod VPS
+ Ubuntu 24.04, 1–2 GB           Ubuntu 24.04, 4–8 GB
+       │                               │
+ OpenShip Edge :80/:443         OpenShip Edge :80/:443
+       │                               │
+ OpenShip Bare :3001            Laravel (FrankenPHP)
+  (Control Plane daemon)               │ (openship-network)
+       │                        ┌──────┴──────┐
+       │                        │             │
+       │                   MariaDB:3306  Redis:6379
+       │
+       └────── SSH management ─────────►
 ```
-                     [ Internet ]
-                          │
-                   (OpenShip Edge)
-                          │ :80 / :443
-               ┌──────────┴──────────┐
-               │  Проекты (Noire...) │
-               │     FrankenPHP      │
-               └──────────┬──────────┘
-                          │ Docker Network (openship-network)
-         ┌────────────────┴────────────────┐
-         │                                 │
-  [ MariaDB:3306 ]                  [ Redis:6379 ]
-  • Изолирован от интернета         • Изолирован от интернета
-  • Named Volume: mariadb_data      • Named Volume: redis_data
-  • UTF-8mb4 / InnoDB Tuned         • LRU Eviction / AOF
-  • Автосоздание БД проектами       • Префиксы ключей по проектам
-```
+
+> [!IMPORTANT]
+> **Key Invariant**: The Control VPS is **never in the HTTP request path** of production applications.
+> If the Control VPS goes down, all production apps continue running without interruption.
 
 ---
 
-## 🚀 Развертывание в OpenShip
+## Control Plane Installation
 
-1. Подключите этот репозиторий в панели **OpenShip**.
-2. OpenShip автоматически обнаружит корневой `docker-compose.yml` и `openship.json`.
-3. Задайте Environment Variables (при необходимости):
+### Runtime Modes
 
-| Переменная | Дефолт | Описание |
-|---|---|---|
-| `MARIADB_ROOT_PASSWORD` | `openship_root_secret` | Root-пароль MariaDB |
-| `MARIADB_BUFFER_POOL_SIZE` | `512M` | Размер буферного пула InnoDB |
-| `MARIADB_LOG_FILE_SIZE` | `128M` | Размер Redo-лога InnoDB |
-| `MARIADB_MAX_CONNECTIONS` | `150` | Лимит соединений |
-| `MARIADB_MEMORY_LIMIT` | `1536M` | Ограничение RAM контейнера MariaDB |
-| `REDIS_PASSWORD` | *(пусто)* | Пароль Redis (для внутренней сети опционален) |
-| `REDIS_MAXMEMORY` | `256mb` | Лимит оперативной памяти Redis |
-| `REDIS_MEMORY_LIMIT` | `512M` | Ограничение RAM контейнера Redis |
+| Mode | OpenShip Runtime | Proxy (:80/:443) | Docker | Min RAM | Best for |
+|---|---|---|---|---|---|
+| **Bare** *(recommended)* | Native process + embedded DB | Edge container | Edge only | 1 GB | Dedicated Control Plane |
+| **Standard** | Docker Compose | Edge container | Full stack | 2 GB | Full Docker environment |
 
-4. Нажмите **Deploy**. Сервисы запустятся в общей сети `openship-network` со встроенными healthcheck-проверками.
+On 1–2 GB VPS instances **Bare mode is recommended**: OpenShip runs as a lightweight native systemd service with an embedded database. Docker is used exclusively for the Edge container routing the control plane domain.
 
----
-
-## 🔒 Сеть и безопасность
-
-- Порты `3306` и `6379` **не выставлены наружу** на хост и не доступны из публичного интернета.
-- Доступ возможен **только** из контейнеров, подключенных к `openship-network`.
-- MariaDB и Redis доступны по постоянным DNS-алиасам:
-  - `mariadb:3306`
-  - `redis:6379`
-
----
-
-## 📦 Подключение проектов (Noire и др.)
-
-Для развертывания ваших Laravel-проектов используйте готовый универсальный шаблон:
-👉 [`templates/laravel-frankenphp/`](templates/laravel-frankenphp/)
-
-Каждый проект при первом запуске:
-1. Автоматически находит MariaDB и Redis в сети.
-2. Подключается с `DB_ROOT_PASSWORD` и **сам создает свою базу данных и пользователя** с нужным паролем.
-3. Удаляет root-пароль из памяти.
-4. Накатывает миграции и запускает FrankenPHP на порту 80.
-
----
-
-## 💾 Автоматический бэкап баз данных
-
-Скрипт [`backup.sh`](backup.sh) делает сжатый дамп всех баз данных с ротацией 7 дней:
+### Option A — One-liner (recommended for fresh VPS)
 
 ```bash
-# Ручной запуск
-sudo /usr/local/bin/mariadb-backup.sh
-
-# Cron (ежедневно в 03:00 UTC)
-0 3 * * * /usr/local/bin/mariadb-backup.sh >> /var/log/mariadb-backup.log 2>&1
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
 ```
 
-Дампы сохраняются в `/var/backups/mariadb/`.
+### Option B — Clone and run
+
+```bash
+git clone https://github.com/HomaEEE/OpenShip-deploy.git
+cd OpenShip-deploy
+chmod +x *.sh
+sudo ./install.sh
+```
+
+### What `install.sh` does
+
+1. Validates OS (Ubuntu 24.04 LTS), root/sudo privileges, architecture (`amd64`/`arm64`).
+2. Checks available RAM and automatically configures swap if needed.
+3. Hardens SSH (preserves key access, disables root password login if keys exist).
+4. Configures UFW firewall (SSH, and Edge ports `:80/:443` when public domain is configured).
+5. Configures Fail2ban for brute-force protection.
+6. Installs official Docker Engine and Compose plugin.
+7. Installs Node.js / Bun runtime for OpenShip daemon.
+8. Launches OpenShip first-time setup (`--bare --non-interactive`).
+9. Polls API health-check; rolls back automatically on failure.
+10. Prints post-install verification summary and login URL.
+
+---
+
+## Host Control Mode
+
+During installation you choose whether OpenShip should manage the Control VPS as an execution server:
+
+| Option | Dashboard terminal | Server in OpenShip | Notes |
+|---|---|---|---|
+| **Full control** *(default)* | ✅ Works | ✅ Visible | Recommended |
+| **Strict isolation** (`--no-host-control`) | ❌ Blocked | ❌ Hidden | Maximum isolation |
+
+---
+
+## Domain Configuration
+
+| Option | How it works |
+|---|---|
+| **Public HTTPS domain** | OpenShip Edge (:80/:443) handles TLS via Let's Encrypt (HTTP-01 challenge). Point DNS/Cloudflare A-record to this VPS IP. |
+| **Private / local** | Dashboard stays on internal port 3001. Only SSH is exposed in UFW. Configure Cloudflare Tunnel or VPN later. |
+
+---
+
+## Shared Database Services (MariaDB + Redis)
+
+For production/worker nodes, this repository provides a dedicated **MariaDB 11.4 LTS + Redis 7.4 Alpine** stack.
+
+### 1. Direct OpenShip Deployment (Recommended)
+This repository contains a root `docker-compose.yml` and `openship.json`. You can add this repository as a project in your OpenShip dashboard and deploy it directly with zero configuration:
+
+- **Root password default**: `openship_root_secret` (or override via `MARIADB_ROOT_PASSWORD` in OpenShip Environment Variables).
+- **Network**: Registers in `openship-network` under aliases `mariadb` and `redis`.
+- **Security**: Ports `3306` and `6379` are **not exposed to the host or internet**. Accessible only to containers on `openship-network`.
+
+### 2. Manual CLI Deployment
+```bash
+# On the worker node
+cd OpenShip-deploy
+sudo ./deploy-services.sh
+```
+
+Management commands:
+```bash
+sudo ./deploy-services.sh --status    # Check container health
+sudo ./deploy-services.sh --logs      # View live logs
+sudo ./deploy-services.sh --restart   # Restart services
+sudo ./deploy-services.sh --stop      # Stop (volumes preserved)
+```
+
+### 3. Automated Backups
+The included [`backup.sh`](backup.sh) script creates compressed daily database dumps with automatic 7-day retention:
+
+```bash
+# Run backup immediately
+sudo ./backup.sh
+
+# Install daily cron job (runs at 03:00 UTC)
+(crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/mariadb-backup.sh >> /var/log/mariadb-backup.log 2>&1") | crontab -
+```
+Backups are stored in `/var/backups/mariadb/`.
+
+---
+
+## Deploying Laravel Applications
+
+Use the ready-to-go universal template in [`templates/laravel-frankenphp/`](templates/laravel-frankenphp/):
+
+1. Copy `deploy/`, `openship.json`, and `.github/workflows/deploy.yml` into your Laravel project root.
+2. In OpenShip project settings, configure:
+   - `DB_DATABASE=your_app`
+   - `DB_USERNAME=your_app`
+   - `DB_PASSWORD=your_secure_password`
+   - `DB_ROOT_PASSWORD=openship_root_secret` (only needed during first deploy; wiped from memory after creation)
+   - `APP_KEY=base64:...`
+3. On first startup, `entrypoint.sh`:
+   - Auto-discovers MariaDB and Redis in `openship-network`.
+   - Creates the database and user automatically via PHP PDO.
+   - Runs migrations (`php artisan migrate --force`).
+   - Caches configs, routes, views, icons.
+   - Starts FrankenPHP on port 80 with Cloudflare/OpenShip trusted proxy support.
+
+---
+
+## Updating OpenShip
+
+```bash
+sudo ./update.sh --check   # Check for available updates
+sudo ./update.sh           # Apply update
+```
+
+---
+
+## Diagnostics
+
+```bash
+sudo ./doctor.sh
+```
+
+Checks: OS · architecture · CPU/RAM/disk · swap · installer state · OpenShip CLI · OpenShip status · Node/Bun · Docker · listening ports · SSH · UFW · Fail2ban
+
+---
+
+## Logs & State
+
+| File | Contents |
+|---|---|
+| `/var/log/openship-control-install.log` | Installation log |
+| `/var/log/openship-control-update.log` | Update log |
+| `/var/log/openship-control-doctor.log` | Diagnostic log |
+| `/etc/openship-control/install.conf` | Installer state |
+
+---
+
+## Project Structure
+
+```text
+OpenShip-deploy/
+├── install.sh                  # Control Plane provisioner
+├── update.sh                   # OpenShip update helper
+├── doctor.sh                   # System & service diagnostics
+├── deploy-services.sh          # Worker database stack runner
+├── backup.sh                   # Automated MariaDB backup script
+├── docker-compose.yml          # Root MariaDB + Redis compose (for OpenShip Git deploy)
+├── openship.json               # OpenShip descriptor
+├── .env.example                # Environment variables reference
+├── config/
+│   └── defaults.env.example    # Installer defaults
+├── docs/
+│   ├── README.ru.md            # Документация на русском
+│   └── README.ua.md            # Документація українською
+├── services/
+│   └── mariadb-redis/          # Shared database stack source
+└── templates/
+    └── laravel-frankenphp/     # Universal Laravel + FrankenPHP deploy template
+        ├── deploy/
+        │   ├── Caddyfile
+        │   ├── Dockerfile
+        │   ├── docker-compose.yml
+        │   ├── entrypoint.sh
+        │   └── php.ini
+        ├── openship.json
+        ├── .github/workflows/deploy.yml
+        └── README.md
+```
+
+---
+
+## Requirements
+
+- **OS**: Ubuntu 24.04 LTS
+- **Access**: root or sudo
+- **RAM**: 1 GB minimum (Bare) · 2 GB+ recommended (Standard)
+- **Disk**: 10 GB free minimum
+- **Arch**: amd64 or arm64
+
+---
+
+## Official Documentation
+
+- [openship.io/docs](https://openship.io/docs/)
+- [Laravel Documentation](https://laravel.com/docs)
+- [FrankenPHP Documentation](https://frankenphp.dev/)
+
+---
+
+## License
+
+MIT
