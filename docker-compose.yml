@@ -1,0 +1,75 @@
+services:
+  mariadb:
+    image: mariadb:${MARIADB_VERSION:-11.4}
+    container_name: mariadb
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --bind-address=0.0.0.0
+      - --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-512M}
+      - --innodb-log-file-size=${MARIADB_LOG_FILE_SIZE:-128M}
+      - --max-connections=${MARIADB_MAX_CONNECTIONS:-150}
+      - --slow-query-log=${MARIADB_SLOW_QUERY_LOG:-1}
+      - --long-query-time=${MARIADB_LONG_QUERY_TIME:-2}
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-openship_root_secret}
+      MARIADB_ROOT_HOST: "%"
+    deploy:
+      resources:
+        limits:
+          memory: ${MARIADB_MEMORY_LIMIT:-1536M}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    networks:
+      openship-network:
+        aliases:
+          - mariadb
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:${REDIS_VERSION:-7.4-alpine}
+    container_name: redis
+    restart: unless-stopped
+    command: >
+      sh -c 'exec redis-server
+      --bind 0.0.0.0
+      --protected-mode no
+      --appendonly yes
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
+      $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-512M}
+    volumes:
+      - redis_data:/data
+    networks:
+      openship-network:
+        aliases:
+          - redis
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  mariadb_data:
+    name: mariadb_data
+  redis_data:
+    name: redis_data
+
+networks:
+  openship-network:
+    name: openship-network
+    external: true
