@@ -3,12 +3,17 @@ services:
     image: mariadb:${MARIADB_VERSION:-11.4}
     container_name: mariadb
     restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --bind-address=0.0.0.0
+      - --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-512M}
+      - --max-connections=${MARIADB_MAX_CONNECTIONS:-150}
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
       MARIADB_ROOT_HOST: "%"
     volumes:
       - mariadb_data:/var/lib/mysql
-      - ./config/mariadb/my.cnf:/etc/mysql/conf.d/custom.cnf:ro
     networks:
       - default
     healthcheck:
@@ -23,12 +28,17 @@ services:
     container_name: redis
     restart: unless-stopped
     command: >
-      sh -c 'exec redis-server /usr/local/etc/redis/redis.conf $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+      sh -c 'exec redis-server
+      --bind 0.0.0.0
+      --protected-mode yes
+      --appendonly yes
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
+      $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
-      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     networks:
       - default
     healthcheck:

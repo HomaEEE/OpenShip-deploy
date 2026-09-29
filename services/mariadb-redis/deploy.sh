@@ -25,7 +25,6 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 readonly ENV_FILE="${SCRIPT_DIR}/.env"
 readonly ENV_EXAMPLE="${SCRIPT_DIR}/.env.example"
-readonly MARIADB_CONF="${SCRIPT_DIR}/config/mariadb/my.cnf"
 
 # Colors
 if [[ -t 1 ]]; then
@@ -109,15 +108,14 @@ tune_mariadb_buffer_pool() {
     elif (( pool_mb > 4096 )); then
         pool_mb=4096
     fi
-
-    if [[ -f "$MARIADB_CONF" ]]; then
-        sed -i "s/^innodb_buffer_pool_size = .*/innodb_buffer_pool_size = ${pool_mb}M/" "$MARIADB_CONF" 2>/dev/null || true
-        log "Configured MariaDB innodb_buffer_pool_size = ${pool_mb}M (~40% of RAM)."
-    fi
+    MARIADB_BUFFER_POOL_SIZE="${pool_mb}M"
+    log "Detected MariaDB innodb_buffer_pool_size = ${MARIADB_BUFFER_POOL_SIZE} (~40% of RAM)."
 }
 
 configure_environment() {
     section "Configuring Environment (.env)"
+
+    tune_mariadb_buffer_pool
 
     if [[ ! -f "$ENV_FILE" ]]; then
         if [[ -f "$ENV_EXAMPLE" ]]; then
@@ -126,6 +124,7 @@ configure_environment() {
             cat > "$ENV_FILE" <<'EOF'
 MARIADB_VERSION=11.4
 MARIADB_ROOT_PASSWORD=
+MARIADB_BUFFER_POOL_SIZE=512M
 REDIS_VERSION=7.4-alpine
 REDIS_PASSWORD=
 EOF
@@ -134,14 +133,16 @@ EOF
     fi
 
     # Read current values
-    local maria_pass redis_pass maria_ver redis_ver
+    local maria_pass redis_pass maria_ver redis_ver maria_pool
     maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'"'" || echo "11.4")"
     redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'"'" || echo "7.4-alpine")"
     maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'"'" || true)"
     redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'"'" || true)"
+    maria_pool="$(grep -E '^MARIADB_BUFFER_POOL_SIZE=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'"'" || echo "${MARIADB_BUFFER_POOL_SIZE}")"
 
     [[ -z "$maria_ver" ]] && maria_ver="11.4"
     [[ -z "$redis_ver" ]] && redis_ver="7.4-alpine"
+    [[ -z "$maria_pool" ]] && maria_pool="${MARIADB_BUFFER_POOL_SIZE}"
 
     if [[ -z "$maria_pass" ]]; then
         maria_pass="$(generate_random_password 24)"
@@ -159,6 +160,7 @@ EOF
 
 MARIADB_VERSION=${maria_ver}
 MARIADB_ROOT_PASSWORD=${maria_pass}
+MARIADB_BUFFER_POOL_SIZE=${maria_pool}
 
 REDIS_VERSION=${redis_ver}
 REDIS_PASSWORD=${redis_pass}
@@ -172,7 +174,6 @@ start_services() {
     section "Deploying MariaDB and Redis containers"
 
     ensure_docker_network
-    tune_mariadb_buffer_pool
 
     log "Starting stack..."
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
