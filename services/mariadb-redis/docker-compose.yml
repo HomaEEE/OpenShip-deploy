@@ -15,7 +15,9 @@ services:
     volumes:
       - mariadb_data:/var/lib/mysql
     networks:
-      - default
+      default:
+        aliases:
+          - mariadb
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -40,7 +42,9 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      - default
+      default:
+        aliases:
+          - redis
     healthcheck:
       test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
       interval: 10s
