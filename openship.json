@@ -1,4 +1,5 @@
 {
-  "name": "openship-deploy",
-  "compose_file": "docker-compose.yml"
+  "$schema": "https://openship.io/openship.schema.json",
+  "framework": "docker-compose",
+  "composePath": "docker-compose.yml"
 }

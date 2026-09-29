@@ -1,10 +1,7 @@
 {
-  "name": "laravel-frankenphp",
-  "compose_file": "deploy/docker-compose.yml",
-  "domains": [
-    {
-      "service": "web",
-      "port": 80
-    }
-  ]
+  "$schema": "https://openship.io/openship.schema.json",
+  "framework": "docker-compose",
+  "composePath": "deploy/docker-compose.yml",
+  "port": 80,
+  "domains": []
 }
