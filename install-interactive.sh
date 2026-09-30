@@ -403,16 +403,34 @@ configure_ufw() {
     SSH_PORT="$(detect_ssh_port)"
     log "Active SSH port detected: ${SSH_PORT}"
 
-    ufw default deny incoming
-    ufw default allow outgoing
+    # Repair corrupted single quotes in UFW rule files left by prior failed attempts
+    for f in /etc/ufw/user.rules /etc/ufw/user6.rules; do
+        if [[ -f "$f" ]]; then
+            sed -i "s/Let's Encrypt/Lets Encrypt/g" "$f" 2>/dev/null || true
+            sed -i "s/'s /s /g" "$f" 2>/dev/null || true
+        fi
+    done
 
-    ufw allow "${SSH_PORT}/tcp" comment "SSH" || ufw allow "${SSH_PORT}/tcp"
-    ufw allow 80/tcp comment "HTTP" || ufw allow 80/tcp
-    ufw allow 443/tcp comment "HTTPS" || ufw allow 443/tcp
+    ufw default deny incoming >/dev/null 2>&1 || true
+    ufw default allow outgoing >/dev/null 2>&1 || true
 
-    ufw --force enable
+    ufw allow "${SSH_PORT}/tcp" comment "SSH" >/dev/null 2>&1 || \
+        ufw allow "${SSH_PORT}/tcp" >/dev/null 2>&1 || \
+        warn "Could not add SSH port ${SSH_PORT} to UFW."
 
-    success "UFW enabled (ports: ${SSH_PORT}/tcp, 80/tcp, 443/tcp allowed)."
+    ufw allow 80/tcp comment "HTTP" >/dev/null 2>&1 || \
+        ufw allow 80/tcp >/dev/null 2>&1 || \
+        warn "Could not add 80/tcp to UFW."
+
+    ufw allow 443/tcp comment "HTTPS" >/dev/null 2>&1 || \
+        ufw allow 443/tcp >/dev/null 2>&1 || \
+        warn "Could not add 443/tcp to UFW."
+
+    if ufw --force enable >/dev/null 2>&1; then
+        success "UFW enabled (ports: ${SSH_PORT}/tcp, 80/tcp, 443/tcp allowed)."
+    else
+        warn "Could not enable UFW (possibly container or missing kernel modules). Continuing."
+    fi
 }
 
 configure_fail2ban() {
