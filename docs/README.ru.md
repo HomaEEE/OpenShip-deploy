@@ -91,14 +91,19 @@ sudo ./install.sh
 
 Автоматически выполняет системную подготовку и hardening (swap, sysctl, journald, UFW, Fail2ban, Docker) без лишних вопросов, скачивает CLI с `openship.io` и передает 100% интерактивный контроль официальному визарду OpenShip:
 
-**Одна команда:**
+**Одна команда (интерактивный выбор режима):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
 ```
 
+**Прямой запуск в Bare-режиме (встроенная БД, ~150 МБ RAM):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash -s -- --bare
+```
+
 **Или через клонирование:**
 ```bash
-sudo ./install-interactive.sh
+sudo ./install-interactive.sh --bare
 ```
 </details>
 
@@ -139,8 +144,9 @@ sudo ./install-interactive.sh
 
 | Вариант | Как работает |
 |---|---|
-| **Публичный HTTPS-домен** | OpenShip Edge (:80/:443) получает TLS через Let's Encrypt (HTTP-01). Направить DNS/Cloudflare A-запись на IP этого VPS. |
-| **Локальный / приватный** | Дашборд остаётся на порту 3001. Только SSH открыт в UFW. Настроить Cloudflare Tunnel или VPN позже. |
+| **Caddy reverse proxy** *(Рекомендуется)* | Caddy слушает `:80` (HTTP) или `:443` (HTTPS) и проксирует на `127.0.0.1:3001`. Порт 3001 закрыт в UFW. Доступ по прямому IP или домену с auto-TLS. |
+| **Публичный HTTPS-домен (Edge)** | OpenShip Edge (:80/:443 через Docker) получает TLS через Let's Encrypt (HTTP-01). Направить DNS/Cloudflare A-запись на IP этого VPS. |
+| **Локальный / приватный** | Дашборд остаётся на порту 3001. Только SSH открыт в UFW. Доступ через Cloudflare Tunnel или VPN. |
 
 ---
 

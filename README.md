@@ -98,14 +98,19 @@ sudo ./install.sh
 
 Automatically configures server security & environment (swap, sysctl, journald, UFW, Fail2ban, Docker), downloads the official OpenShip CLI from `openship.io`, and hands over full interactive control directly to OpenShip's setup wizard:
 
-**One-liner:**
+**One-liner (interactive mode selection):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
 ```
 
+**Direct Bare mode (embedded DB, ~150 MB RAM):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash -s -- --bare
+```
+
 **Or via clone:**
 ```bash
-sudo ./install-interactive.sh
+sudo ./install-interactive.sh --bare
 ```
 </details>
 
@@ -139,8 +144,9 @@ During installation you choose whether OpenShip should manage the Control VPS as
 
 | Option | How it works |
 |---|---|
-| **Public HTTPS domain** | OpenShip Edge (:80/:443) handles TLS via Let's Encrypt (HTTP-01 challenge). Point DNS/Cloudflare A-record to this VPS IP. |
-| **Private / local** | Dashboard stays on internal port 3001. Only SSH is exposed in UFW. Configure Cloudflare Tunnel or VPN later. |
+| **Caddy reverse proxy** *(Recommended)* | Caddy handles `:80` (HTTP) or `:443` (HTTPS) and proxies to internal `127.0.0.1:3001`. Port 3001 is closed in UFW for security. Works with direct IP or custom domain with auto-TLS. |
+| **Public HTTPS domain (Edge)** | OpenShip Edge (:80/:443 container) handles TLS via Let's Encrypt (HTTP-01 challenge). Point DNS/Cloudflare A-record to this VPS IP. |
+| **Private / local** | Dashboard stays on internal port 3001. Only SSH is exposed in UFW. Access via Cloudflare Tunnel or VPN. |
 
 ---
 

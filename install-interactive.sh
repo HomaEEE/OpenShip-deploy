@@ -62,10 +62,11 @@ _TW="$(tput cols 2>/dev/null || echo 60)"
 # Logging
 # ------------------------------------------------------------------------------
 
-mkdir -p "$(dirname "$LOG_FILE")"
-touch "$LOG_FILE"
-
-exec > >(tee -a "$LOG_FILE") 2>&1
+if [[ "$EUID" -eq 0 ]]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+    touch "$LOG_FILE"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+fi
 
 log() {
     echo -e "  ${BLUE}·${NC} $*"
@@ -254,6 +255,95 @@ check_resources() {
     success "Resource check passed."
 }
 
+parse_arguments() {
+    INSTALL_MODE="${INSTALL_MODE:-}"
+    CADDY_DOMAIN="${CADDY_DOMAIN:-}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --bare|-b)
+                INSTALL_MODE="bare"
+                shift
+                ;;
+            --standard|-s)
+                INSTALL_MODE="standard"
+                shift
+                ;;
+            --domain|-d)
+                CADDY_DOMAIN="${2:-}"
+                shift 2
+                ;;
+            --domain=*)
+                CADDY_DOMAIN="${1#*=}"
+                shift
+                ;;
+            --help|-h)
+                echo "Usage: sudo ./install-interactive.sh [--bare | --standard] [--domain <domain>]"
+                exit 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+}
+
+select_installation_mode() {
+    section "OpenShip installation mode"
+
+    if [[ -z "${INSTALL_MODE}" ]]; then
+        if (( RAM_MB < RECOMMENDED_RAM_MB )); then
+            echo -e "${BOLD}${YELLOW}Low-memory VPS detected: ${RAM_MB} MB RAM.${NC}"
+            echo "Bare mode (native process + embedded DB + Caddy proxy) is strongly recommended."
+            echo
+            echo "  1) Bare (Recommended) — Native process + embedded DB + Caddy (~150 MB RAM)"
+            echo "  2) Standard — Full Docker Compose stack (Postgres + Redis, requires 2+ GB RAM)"
+            echo
+        else
+            echo "Select OpenShip installation mode:"
+            echo
+            echo "  1) Bare (Lowest RAM) — Native process + embedded DB + Caddy (~150 MB RAM)"
+            echo "  2) Standard — Full Docker Compose stack"
+            echo
+        fi
+
+        local choice="1"
+        if [[ -e /dev/tty && -r /dev/tty ]]; then
+            read -r -p "Select [1]: " choice </dev/tty || choice="1"
+            choice="${choice//[$'\r\n\t ']/}"
+            choice="${choice:-1}"
+        fi
+
+        if [[ "$choice" == "2" ]]; then
+            INSTALL_MODE="standard"
+        else
+            INSTALL_MODE="bare"
+        fi
+    fi
+
+    success "Selected mode: ${INSTALL_MODE^^}"
+
+    if [[ "$INSTALL_MODE" == "bare" && -z "${CADDY_DOMAIN}" ]]; then
+        echo
+        echo -e "${BOLD}${CYAN}Caddy Reverse Proxy Setup (Bare Mode)${NC}"
+        echo "Caddy will expose ports :80/:443 and proxy directly to localhost:3001."
+        echo "Port 3001 stays closed in UFW for maximum security."
+        echo
+        echo "Enter domain for OpenShip (e.g. os.example.com for auto-HTTPS),"
+        echo "or press ENTER to serve over plain HTTP via server IP:"
+        if [[ -e /dev/tty && -r /dev/tty ]]; then
+            read -r -p "Domain []: " CADDY_DOMAIN </dev/tty || CADDY_DOMAIN=""
+            CADDY_DOMAIN="${CADDY_DOMAIN//[$'\r\n\t ']/}"
+        fi
+    fi
+
+    if [[ -n "${CADDY_DOMAIN}" ]]; then
+        success "Caddy domain: ${CADDY_DOMAIN}"
+    else
+        success "Caddy: HTTP on port 80 (accessible by server IP)"
+    fi
+}
+
 detect_ssh_port() {
     local port=""
 
@@ -411,6 +501,10 @@ configure_ufw() {
         fi
     done
 
+    # Ensure port 3001 is closed externally (Caddy reverse-proxies :80/:443 to localhost:3001)
+    ufw delete allow 3001/tcp >/dev/null 2>&1 || true
+    ufw delete allow 3001 >/dev/null 2>&1 || true
+
     ufw default deny incoming >/dev/null 2>&1 || true
     ufw default allow outgoing >/dev/null 2>&1 || true
 
@@ -427,7 +521,7 @@ configure_ufw() {
         warn "Could not add 443/tcp to UFW."
 
     if ufw --force enable >/dev/null 2>&1; then
-        success "UFW enabled (ports: ${SSH_PORT}/tcp, 80/tcp, 443/tcp allowed)."
+        success "UFW enabled (ports: ${SSH_PORT}/tcp, 80/tcp, 443/tcp allowed; port 3001 secured)."
     else
         warn "Could not enable UFW (possibly container or missing kernel modules). Continuing."
     fi
@@ -471,29 +565,28 @@ configure_unattended_upgrades() {
 install_docker() {
     section "Docker Engine"
 
-    if command_exists docker; then
-        success "Docker already installed: $(docker --version)"
-        return
-    fi
-
-    run_task "Adding Docker repository" bash -c '
-        install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-        chmod a+r /etc/apt/keyrings/docker.asc
-        # shellcheck disable=SC1091
-        source /etc/os-release
-        cat > /etc/apt/sources.list.d/docker.list <<EOF
+    if ! command_exists docker; then
+        run_task "Adding Docker repository" bash -c '
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+            chmod a+r /etc/apt/keyrings/docker.asc
+            # shellcheck disable=SC1091
+            source /etc/os-release
+            cat > /etc/apt/sources.list.d/docker.list <<EOF
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-${VERSION_CODENAME}} stable
 EOF
-        apt-get update -qq
-    '
+            apt-get update -qq
+        '
 
-    run_task "Installing Docker CE Engine" apt-get install -y -qq \
-        docker-ce \
-        docker-ce-cli \
-        containerd.io \
-        docker-buildx-plugin \
-        docker-compose-plugin
+        run_task "Installing Docker CE Engine" apt-get install -y -qq \
+            docker-ce \
+            docker-ce-cli \
+            containerd.io \
+            docker-buildx-plugin \
+            docker-compose-plugin
+    else
+        success "Docker already installed: $(docker --version)"
+    fi
 
     run_task "Starting Docker daemon" systemctl enable --now docker
 }
@@ -513,16 +606,90 @@ configure_docker() {
   "log-opts": {
     "max-size": "10m",
     "max-file": "3"
-  },
-  "live-restore": true
+  }
 }
 EOF
 
-    systemctl restart docker >/dev/null 2>&1 || true
+    systemctl restart docker >/dev/null 2>&1 || systemctl start docker >/dev/null 2>&1 || true
 
-    docker info >/dev/null 2>&1 || true
+    local retries=10
+    while (( retries > 0 )); do
+        if docker info >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        retries=$(( retries - 1 ))
+    done
 
-    success "Docker daemon configured with log rotation."
+    if ! docker info >/dev/null 2>&1; then
+        warn "Docker daemon did not respond. Trying service restart..."
+        systemctl restart docker || true
+        sleep 2
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        if [[ "$INSTALL_MODE" == "bare" ]]; then
+            warn "Docker daemon is not running (optional for Bare mode with Caddy). Continuing."
+        else
+            die "Docker daemon is not running. Please check: systemctl status docker"
+        fi
+    else
+        success "Docker daemon configured and active."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Caddy Reverse Proxy (Bare Mode)
+# ------------------------------------------------------------------------------
+
+configure_caddy() {
+    if [[ "$INSTALL_MODE" != "bare" ]]; then
+        return
+    fi
+
+    section "Caddy Reverse Proxy"
+
+    if ! command_exists caddy; then
+        run_task "Adding Caddy repository" bash -c "
+            apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
+            rm -f /etc/apt/sources.list.d/caddy-stable.sources
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes 2>/dev/null || true
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+            apt-get update -qq
+        "
+
+        run_task "Installing Caddy web server" apt-get install -y -qq caddy
+    else
+        success "Caddy is already installed."
+    fi
+
+    local caddyfile_content=""
+    if [[ -n "${CADDY_DOMAIN}" ]]; then
+        caddyfile_content="${CADDY_DOMAIN} {
+    reverse_proxy 127.0.0.1:3001 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}"
+        log "Caddy: automatic Let's Encrypt TLS for https://${CADDY_DOMAIN}"
+    else
+        caddyfile_content=":80 {
+    reverse_proxy 127.0.0.1:3001 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+    }
+}"
+        log "Caddy: listening on port :80 (HTTP) forwarding to localhost:3001"
+    fi
+
+    mkdir -p /etc/caddy
+    echo "$caddyfile_content" > /etc/caddy/Caddyfile
+
+    run_task "Starting Caddy service" systemctl enable --now caddy
+    systemctl restart caddy >/dev/null 2>&1 || true
+
+    success "Caddy reverse proxy configured (:80/:443 -> 127.0.0.1:3001)."
 }
 
 # ------------------------------------------------------------------------------
@@ -546,13 +713,50 @@ install_openship_cli() {
     success "OpenShip CLI installed: $(openship --version 2>/dev/null || true)"
 }
 
+preflight_openship() {
+    section "OpenShip pre-flight"
+
+    command_exists openship ||
+        die "OpenShip CLI was not found."
+
+    if [[ "$INSTALL_MODE" == "standard" ]]; then
+        command_exists docker ||
+            die "Docker CLI is not found. Standard mode requires Docker."
+
+        docker ps >/dev/null 2>&1 ||
+            die "Docker daemon is not responding to 'docker ps'. Check: systemctl status docker"
+    else
+        if command_exists docker && docker ps >/dev/null 2>&1; then
+            success "Docker is active (optional in Bare mode)."
+        else
+            log "Docker daemon not running (not required for Bare mode + Caddy)."
+        fi
+    fi
+
+    success "Pre-flight checks passed."
+}
+
 handover_to_openship() {
     section "Handing over to OpenShip setup"
 
     echo
     echo -e "  ${BOLD}${GREEN}✔ Server pre-configuration and hardening complete!${NC}"
     echo
-    echo -e "  ${CYAN}Starting official OpenShip setup wizard with full interactive control...${NC}"
+    local public_ip=""
+    public_ip="$(curl -4s --max-time 3 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+
+    if [[ "$INSTALL_MODE" == "bare" ]]; then
+        if [[ -n "${CADDY_DOMAIN}" ]]; then
+            echo -e "  ${CYAN}Starting OpenShip Bare: openship up --bare --public-url https://${CADDY_DOMAIN}${NC}"
+            echo -e "  ${DIM}(Dashboard will be live at https://${CADDY_DOMAIN} via Caddy)${NC}"
+        else
+            echo -e "  ${CYAN}Starting OpenShip Bare: openship up --bare --public-url http://${public_ip:-localhost}${NC}"
+            echo -e "  ${DIM}(Dashboard will be live at http://${public_ip:-<VPS-IP>} via Caddy :80)${NC}"
+        fi
+    else
+        echo -e "  ${CYAN}Starting OpenShip Standard: openship up${NC}"
+        echo -e "  ${DIM}(Full Docker Compose stack)${NC}"
+    fi
     echo -e "  ${DIM}(Press Ctrl+C at any time if you wish to exit)${NC}"
     echo
     sleep 2
@@ -562,7 +766,17 @@ handover_to_openship() {
         exec </dev/tty >/dev/tty 2>/dev/tty
     fi
 
-    exec openship
+    if [[ "$INSTALL_MODE" == "bare" ]]; then
+        if [[ -n "${CADDY_DOMAIN}" ]]; then
+            exec openship up --bare --public-url "https://${CADDY_DOMAIN}" --hostname "${CADDY_DOMAIN}"
+        elif [[ -n "${public_ip}" ]]; then
+            exec openship up --bare --public-url "http://${public_ip}"
+        else
+            exec openship up --bare
+        fi
+    else
+        exec openship up
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -570,6 +784,8 @@ handover_to_openship() {
 # ------------------------------------------------------------------------------
 
 main() {
+    parse_arguments "$@"
+
     clear || true
 
     echo
@@ -588,6 +804,8 @@ main() {
     check_architecture
     check_resources
 
+    select_installation_mode
+
     install_and_update_packages
     optimize_system
 
@@ -599,7 +817,10 @@ main() {
     install_docker
     configure_docker
 
+    configure_caddy
+
     install_openship_cli
+    preflight_openship
 
     handover_to_openship
 }

@@ -215,6 +215,11 @@ echo
 log "Firewall (UFW)"
 if command -v ufw >/dev/null 2>&1; then
     ufw status verbose || true
+    if ufw status 2>/dev/null | grep -qE "(3001|3001/tcp).*ALLOW"; then
+        warn "Port 3001 is open in UFW! Direct public access to 3001 bypasses Caddy reverse proxy. Run: 'ufw delete allow 3001/tcp'."
+    else
+        ok "Port 3001 is not exposed in UFW (safe behind Caddy / internal)."
+    fi
 else
     warn "UFW is not installed."
 fi
