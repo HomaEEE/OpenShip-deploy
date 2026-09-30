@@ -1135,6 +1135,9 @@ install_and_update_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
+    # Clean up broken/expired Caddy Cloudsmith repos from previous runs before apt-get update
+    rm -f /etc/apt/sources.list.d/caddy-stable.list /etc/apt/sources.list.d/caddy-stable.sources /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
     run_task "Updating package lists" apt-get update -qq
 
     run_task "Upgrading system packages" env DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
@@ -1764,27 +1767,18 @@ configure_caddy() {
     section "Caddy Reverse Proxy"
 
     if ! command_exists caddy; then
-        run_task "Adding Caddy repository" bash -c "
-            mkdir -p /usr/share/keyrings /etc/apt/sources.list.d
-            rm -f /etc/apt/sources.list.d/caddy-stable.sources /etc/apt/sources.list.d/caddy-stable.list
-            curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-            chmod 644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-            echo 'deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' > /etc/apt/sources.list.d/caddy-stable.list
-            apt-get update -qq || true
-        "
-
         run_task "Installing Caddy web server" bash -c "
-            if ! apt-get install -y -qq caddy 2>/dev/null; then
-                local arch=\"\$(dpkg --print-architecture 2>/dev/null || uname -m)\"
-                [[ \"\$arch\" == \"x86_64\" ]] && arch=\"amd64\"
-                [[ \"\$arch\" == \"aarch64\" ]] && arch=\"arm64\"
-                local deb_url=\"\$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest 2>/dev/null | grep -oE 'https://[^\"]+linux_'\"\$arch\"'\.deb' | head -n 1)\"
-                if [[ -n \"\$deb_url\" ]]; then
-                    curl -fsSL \"\$deb_url\" -o /tmp/caddy.deb
-                    dpkg -i /tmp/caddy.deb || apt-get install -f -y -qq
-                    rm -f /tmp/caddy.deb
-                fi
+            rm -f /etc/apt/sources.list.d/caddy-stable.sources /etc/apt/sources.list.d/caddy-stable.list
+            local arch=\"\$(dpkg --print-architecture 2>/dev/null || uname -m)\"
+            [[ \"\$arch\" == \"x86_64\" ]] && arch=\"amd64\"
+            [[ \"\$arch\" == \"aarch64\" ]] && arch=\"arm64\"
+            local deb_url=\"\$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest 2>/dev/null | grep -oE 'https://[^\"]+linux_'\"\$arch\"'\.deb' | head -n 1)\"
+            if [[ -z \"\$deb_url\" ]]; then
+                deb_url=\"https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_\${arch}.deb\"
             fi
+            curl -fsSL \"\$deb_url\" -o /tmp/caddy.deb
+            dpkg -i /tmp/caddy.deb || apt-get install -f -y -qq
+            rm -f /tmp/caddy.deb
             command -v caddy >/dev/null 2>&1
         "
     else
