@@ -1368,13 +1368,15 @@ configure_ufw() {
         fi
     done
 
-    # Ensure port 3001 is closed externally (Caddy/Edge reverse-proxies :80/:443 to localhost:3001)
+    # Ensure ports 3001 and 4000 are closed externally (Caddy reverse-proxies :80/:443 to localhost)
     ufw delete allow 3001/tcp >/dev/null 2>&1 || true
     ufw delete allow 3001 >/dev/null 2>&1 || true
+    ufw delete allow 4000/tcp >/dev/null 2>&1 || true
+    ufw delete allow 4000 >/dev/null 2>&1 || true
 
     ufw --force enable
 
-    success "UFW enabled (port 3001 secured)."
+    success "UFW enabled (ports 3001/4000 secured)."
 }
 
 # ------------------------------------------------------------------------------
@@ -1783,15 +1785,36 @@ configure_caddy() {
         chmod 640 /etc/caddy/certs/*.key 2>/dev/null || true
     fi
 
-    run_task "Configuring Caddyfile (${site_address} -> :3001)" bash -c "
+    run_task "Configuring Caddyfile (${site_address} -> :3001, :4000)" bash -c "
         mkdir -p /etc/caddy
         cat > /etc/caddy/Caddyfile <<EOF
 ${site_address} {
 ${tls_directive}
-    reverse_proxy 127.0.0.1:3001 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
+    # OpenShip API (port 4000) for frontend same-origin proxy (including terminal WebSockets)
+    handle_path /api/proxy/* {
+        reverse_proxy 127.0.0.1:4000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
 ${proto_header}
+        }
+    }
+
+    # OpenShip API (port 4000) for direct API requests
+    handle /api/* {
+        reverse_proxy 127.0.0.1:4000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+${proto_header}
+        }
+    }
+
+    # OpenShip Dashboard UI (port 3001) for all other web requests
+    handle {
+        reverse_proxy 127.0.0.1:3001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+${proto_header}
+        }
     }
 }
 EOF

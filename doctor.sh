@@ -122,7 +122,12 @@ if command -v caddy >/dev/null 2>&1; then
     fi
     if [[ -f /etc/caddy/Caddyfile ]]; then
         if grep -q "127.0.0.1:3001" /etc/caddy/Caddyfile; then
-            ok "Caddyfile proxies to 127.0.0.1:3001"
+            ok "Caddyfile proxies Dashboard to 127.0.0.1:3001"
+        fi
+        if grep -q "127.0.0.1:4000" /etc/caddy/Caddyfile; then
+            ok "Caddyfile proxies API to 127.0.0.1:4000"
+        else
+            warn "Caddyfile does NOT proxy API to 127.0.0.1:4000 (terminal WebSockets / API may fail)"
         fi
         if grep -qE "^[a-zA-Z0-9.-]+ \{" /etc/caddy/Caddyfile && ! grep -qE "^http://" /etc/caddy/Caddyfile; then
             echo "  ℹ Cloudflare SSL tip: if 'Too Many Redirects', switch Cloudflare SSL to 'Full' or prefix domain with 'http://' in /etc/caddy/Caddyfile."
@@ -244,6 +249,11 @@ if command -v ufw >/dev/null 2>&1; then
         warn "Port 3001 is open in UFW! Direct public access to 3001 bypasses Caddy reverse proxy. Run: 'ufw delete allow 3001/tcp'."
     else
         ok "Port 3001 is not exposed in UFW (safe behind Caddy / internal)."
+    fi
+    if ufw status 2>/dev/null | grep -qE "(4000|4000/tcp).*ALLOW"; then
+        warn "Port 4000 is open in UFW! Direct public access to 4000 bypasses Caddy reverse proxy. Run: 'ufw delete allow 4000/tcp'."
+    else
+        ok "Port 4000 is not exposed in UFW (safe behind Caddy / internal)."
     fi
 else
     warn "UFW is not installed."

@@ -2,11 +2,12 @@
 
 # ⚓ OpenShip Deploy
 
-**Виробничий інструментарій для встановлення [OpenShip](https://openship.io/) Control Plane**
+**Автоматизований інструментарій для розгортання Control Plane та сервісів [OpenShip](https://openship.io/) на Ubuntu 24.04 LTS**
 
 [![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04_LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
 [![Bash](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![amd64 · arm64](https://img.shields.io/badge/arch-amd64%20·%20arm64-blue)](#вимоги)
+[![License MIT](https://img.shields.io/badge/license-MIT-green)](#ліцензія)
 
 | [🇬🇧 English](../README.md) | [🇷🇺 Русский](README.ru.md) | 🇺🇦 **Українська** |
 | :---: | :---: | :---: |
@@ -15,326 +16,181 @@
 
 ---
 
-## Про проєкт
+## Швидкий старт
 
-**OpenShip Deploy** — інтерактивний інсталятор для підготовки чистого VPS на Ubuntu 24.04 LTS під **OpenShip Control Plane** — легкий управляючий шар, який оркеструє production-сервери, не обслуговуючи прикладний трафік напряму.
+### 1. Встановлення Control Plane
+Повна підготовка чистого VPS на Ubuntu 24.04 LTS (безпека, swap, UFW, Caddy, OpenShip):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
+```
+
+Або через клонування репозиторію:
+```bash
+git clone https://github.com/HomaEEE/OpenShip-deploy.git
+cd OpenShip-deploy && chmod +x *.sh
+sudo ./install.sh
+```
+
+### 2. Діагностика системи та OpenShip (`doctor.sh`)
+Швидка перевірка стану Control Plane, реверс-проксі Caddy, внутрішніх портів та файрвола:
+
+```bash
+# Прямий запуск через curl (без клонування)
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/doctor.sh | sudo bash
+
+# Або локально з папки репозиторію
+sudo ./doctor.sh
+```
 
 ---
 
 ## Архітектура
 
 ```text
-                    Internet
+                    Інтернет
                        │
                    Cloudflare
                        │
        ┌───────────────┴───────────────┐
        │                               │
- os.example.com                   app.example.com
+ os.example.com                   apps.example.com
        │                               │
-  Control VPS                      Prod VPS
- Ubuntu 24.04, 1–2 GB           Ubuntu 24.04, 4–8 GB
+  Control VPS                      Worker VPS
+ Ubuntu 24.04 (1–2 ГБ)            Ubuntu 24.04 (4–8 ГБ)
        │                               │
- OpenShip Edge :80/:443         OpenShip Edge :80/:443
-       │                               │
- OpenShip Bare :3001            Laravel / CRM
-  (Control Plane daemon)        MariaDB + Redis
+  Caddy :80/:443                  OpenShip Edge :80/:443
+   ├── :3001 (UI Дашборда)             │
+   └── :4000 (API та WebSockets)   Laravel (FrankenPHP)
+       │                               │ (openship-openship-deploy)
+       │                        ┌──────┴──────┐
+       │                        │             │
+       │                   MariaDB:3306  Redis:6379
        │
        └────── SSH управління ─────────►
 ```
 
 > [!IMPORTANT]
-> **Ключовий принцип**: Control VPS **ніколи не знаходиться в HTTP-шляху** production-застосунків.
-> Якщо Control VPS вимкнений, всі production-застосунки продовжують працювати без перерв.
+> **Головний інваріант**: Control VPS **ніколи не бере участі в обробці користувацького HTTP-трафіку** додатків. Якщо Control VPS тимчасово недоступний, усі прод-додатки продовжують працювати без перерв.
 
 ---
 
-## Режими встановлення
+## Режими Control Plane
 
-| Режим | OpenShip Runtime | Проксі (:80/:443) | Docker | RAM | Призначення |
-|---|---|---|---|---|---|
-| **Bare** | Нативний процес + вбудована БД | Edge контейнер | Тільки Edge | 1 GB | Виділений Control Plane |
-| **Standard** | Docker Compose | Edge контейнер | Повний стек | 2 GB | Повна Docker-середа |
+| Режим | Стек OpenShip | Проксі | Мін. RAM | Рекомендація |
+|---|---|---|---|---|
+| **Bare** *(Рекомендовано)* | Нативний процес + вбудована БД | Caddy reverse proxy | 1 ГБ | Виділений Control VPS (швидко, легко) |
+| **Standard** | Docker Compose стек | OpenShip Edge контейнер | 2 ГБ | Повна ізоляція в Docker |
 
----
-
-## Встановлення
-
-<details open>
-<summary><b>🚀 Варіант A — Одна команда (Рекомендується для чистого VPS)</b></summary>
-<br>
-
-Запуск інтерактивного інсталятора однією командою:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
-```
-</details>
-
-<details>
-<summary><b>📦 Варіант B — Клонування репозиторію</b></summary>
-<br>
-
-Клонування репозиторію для попереднього перегляду скриптів:
-
-```bash
-git clone https://github.com/HomaEEE/OpenShip-deploy.git
-cd OpenShip-deploy
-chmod +x *.sh
-sudo ./install.sh
-```
-</details>
-
-<details>
-<summary><b>⚡ Варіант C — Попереднє налаштування + візард OpenShip (install-interactive.sh)</b></summary>
-<br>
-
-Автоматично виконує системну підготовку та hardening (swap, sysctl, journald, UFW, Fail2ban, Docker) без зайвих запитань, завантажує CLI з `openship.io` та передає 100% інтерактивний контроль офіційному візарду OpenShip:
-
-**Одна команда (інтерактивний вибір режиму):**
-```bash
-curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
-```
-
-**Прямий запуск у Bare-режимі (вбудована БД, ~150 МБ RAM):**
-```bash
-curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash -s -- --bare
-```
-
-**Або через клонування:**
-```bash
-sudo ./install-interactive.sh --bare
-```
-</details>
-
-Інсталятор **повністю інтерактивний** — параметри командного рядка не потрібні.
+### Реверс-проксі Caddy (в режимі Bare)
+Caddy приймає зовнішній трафік і безпечно проксіює його локально:
+- `handle_path /api/proxy/*` → `127.0.0.1:4000` (API OpenShip та WebSockets термінала)
+- `handle /api/*` → `127.0.0.1:4000` (прямі виклики API)
+- `handle` → `127.0.0.1:3001` (UI дашборда)
+- Порти `3001` та `4000` закриті в UFW від прямого зовнішнього доступу.
 
 ---
 
-## Що робить інсталятор
+## Діагностика (`doctor.sh`)
 
-1. Перевіряє Ubuntu 24.04 LTS і архітектуру
-2. Перевіряє CPU, RAM, диск — рекомендує Bare при < 2 GB RAM
-3. Вибирає режим (Bare / Standard)
-4. Збирає hostname, timezone, SSH-порт, ім'я адміністратора
-5. Налаштовує домен Control Plane та TLS через Edge (Let's Encrypt HTTP-01)
-6. Налаштовує **режим управління хостом** (термінал дашборду до цього VPS)
-7. Встановлює базові пакети, налаштовує swap, journald, ліміти файлів
-8. Створює адміністратора Linux, hardening SSH
-9. Налаштовує UFW та Fail2ban
-10. Вмикає автоматичні security updates
-11. Встановлює Docker (тільки Edge у Bare; повний стек у Standard)
-12. Встановлює OpenShip CLI
-13. Запускає первинне налаштування OpenShip (`--bare --non-interactive`)
-14. Очікує готовності API; при невдачі — автоматичний rollback
-15. Виводить зведення перевірки після встановлення
+Скрипт [`doctor.sh`](../doctor.sh) проводить повну діагностику стану хоста та компонентів OpenShip.
 
----
+### Запуск
 
-## Режим управління хостом
+```bash
+# Однією командою через curl
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/doctor.sh | sudo bash
 
-| Варіант | Термінал дашборду | Сервер в OpenShip | Примітка |
-|---|---|---|---|
-| **Повний контроль** *(за замовч.)* | ✅ Працює | ✅ Видимий | Як v2.1.2 — рекомендується |
-| **Сувора ізоляція** (`--no-host-control`) | ❌ Заблокований | ❌ Прихований | Максимальна ізоляція |
+# Локально
+sudo ./doctor.sh
+```
 
----
+### Що перевіряє скрипт
 
-## Налаштування домену
-
-| Варіант | Як працює |
+| Категорія | Що перевіряється |
 |---|---|
-| **Caddy reverse proxy** *(Рекомендовано)* | Caddy слухає `:80` (HTTP) або `:443` (HTTPS) і проксіює на `127.0.0.1:3001`. Порт 3001 закритий у UFW. Доступ за прямим IP або доменом з auto-TLS. |
-| **Публічний HTTPS-домен (Edge)** | OpenShip Edge (:80/:443 через Docker) отримує TLS через Let's Encrypt (HTTP-01). Направити DNS/Cloudflare A-запис на IP цього VPS. |
-| **Локальний / приватний** | Дашборд залишається на порту 3001. Тільки SSH відкритий у UFW. Доступ через Cloudflare Tunnel або VPN. |
+| **Ресурси хоста** | Версія OS, ядро, ядра CPU, оперативна пам'ять, Swap, вільний диск |
+| **Control Plane** | Наявність CLI, версія, активність systemd-юніта (`openship.service`) |
+| **Caddy Проксі** | Статус сервісу Caddy, маршрутизація Caddyfile (`:3001` та `:4000`) |
+| **Порти** | Стан `ss -lntp` для SSH, дашборда (`:3001`) та API (`:4000`) |
+| **Docker і сокет** | Демон Docker, доступність `/var/run/docker.sock` для керування хостом |
+| **Файрвол (UFW)** | Відкриті `:80`, `:443`, SSH; порти `:3001` та `:4000` надійно закриті |
+| **Безпека** | Активність Fail2ban та джейла SSH |
+
+*Логи перевірки автоматично зберігаються у `/var/log/openship-doctor.log`.*
 
 ---
 
-## Служби баз даних для Worker-серверів
+## Бази даних Worker (MariaDB + Redis)
 
-Для production/worker VPS — ізольований стек **MariaDB 11.4 + Redis 7.4**:
+Для серверів із робочими додатками:
 
+### Деплой через інтерфейс OpenShip
+Додайте цей репозиторій у дашборд OpenShip. Файл `docker-compose.yml` у корені запустить **MariaDB 11.4 LTS + Redis 7.4 Alpine** у мережу `openship-openship-deploy`. Порти назовні не публікуються.
+
+### Керування через CLI
 ```bash
-# На воркер-сервері
-git clone https://github.com/HomaEEE/OpenShip-deploy.git
-cd OpenShip-deploy
-sudo ./deploy-services.sh
+sudo ./deploy-services.sh             # Запуск стека
+sudo ./deploy-services.sh --status    # Статус контейнерів
+sudo ./deploy-services.sh --logs      # Перегляд логів
+sudo ./deploy-services.sh --restart   # Перезапуск стека
+sudo ./deploy-services.sh --stop      # Зупинка (дані зберігаються)
 ```
 
-### Мережа проєкту
-
-```yaml
-# docker-compose.yml проєкту
-networks:
-  default:
-    name: openship-openship-deploy
-    external: true
-```
-
-### Змінні середовища проєкту
-
-У налаштуваннях OpenShip або в `.env` проєкту вкажіть:
-
-```env
-# MariaDB (підключення до спільного контейнера mariadb)
-DB_CONNECTION=mysql
-DB_HOST=mariadb
-DB_PORT=3306
-DB_DATABASE=noire
-DB_USERNAME=noire
-DB_PASSWORD=your_project_password
-DB_ROOT_PASSWORD=your_mariadb_root_password    # Передається одноразово для створення БД
-
-# Redis (підключення до спільного контейнера redis)
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_CLIENT=phpredis
-REDIS_PASSWORD=your_redis_password
-CACHE_PREFIX=noire_
-```
-
-### Приклад `entrypoint.sh` проєкту (FrankenPHP + Laravel)
-
-Контейнер проєкту автоматично створює БД під час першого старту (якщо передано `DB_ROOT_PASSWORD`), очікує готовності СУБД, застосовує міграції та запускає FrankenPHP:
-
+### Автоматичний бекап
 ```bash
-#!/usr/bin/env bash
-set -e
-
-# 1. Очікування доступності MariaDB та Redis
-echo "Waiting for MariaDB and Redis..."
-php -r '
-  $host = getenv("DB_HOST") ?: "mariadb";
-  $port = getenv("DB_PORT") ?: 3306;
-  $redisHost = getenv("REDIS_HOST") ?: "redis";
-  $redisPort = getenv("REDIS_PORT") ?: 6379;
-
-  for ($i = 0; $i < 30; $i++) {
-    $dbOk = @fsockopen($host, (int)$port, $errno, $errstr, 1);
-    $redisOk = @fsockopen($redisHost, (int)$redisPort, $errno, $errstr, 1);
-    if ($dbOk && $redisOk) {
-      fclose($dbOk);
-      fclose($redisOk);
-      exit(0);
-    }
-    if ($dbOk) fclose($dbOk);
-    if ($redisOk) fclose($redisOk);
-    sleep(1);
-  }
-  fwrite(STDERR, "Database or Redis not reachable after 30s\n");
-  exit(1);
-'
-
-# 2. Створення БД та користувача за наявності DB_ROOT_PASSWORD
-if [ -n "${DB_ROOT_PASSWORD:-}" ]; then
-  echo "Provisioning database '${DB_DATABASE}' via root credentials..."
-  php -r '
-    $host = getenv("DB_HOST") ?: "mariadb";
-    $port = getenv("DB_PORT") ?: 3306;
-    $rootPass = getenv("DB_ROOT_PASSWORD");
-    $dbName = getenv("DB_DATABASE");
-    $dbUser = getenv("DB_USERNAME");
-    $dbPass = getenv("DB_PASSWORD");
-
-    try {
-      $pdo = new PDO("mysql:host={$host};port={$port}", "root", $rootPass, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-      ]);
-      $pdo->exec("CREATE DATABASE IF NOT EXISTS \`{$dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-      if ($dbUser && $dbUser !== "root") {
-        $pdo->exec("CREATE USER IF NOT EXISTS \x27{$dbUser}\x27@\x27%\x27 IDENTIFIED BY \x27{$dbPass}\x27");
-        $pdo->exec("ALTER USER \x27{$dbUser}\x27@\x27%\x27 IDENTIFIED BY \x27{$dbPass}\x27");
-        $pdo->exec("GRANT ALL PRIVILEGES ON \`{$dbName}\`.* TO \x27{$dbUser}\x27@\x27%\x27");
-        $pdo->exec("FLUSH PRIVILEGES");
-      }
-      echo "Database and user ensured.\n";
-    } catch (Exception $e) {
-      fwrite(STDERR, "DB setup error: " . $e->getMessage() . "\n");
-      exit(1);
-    }
-  '
-  # Видаляємо пароль root з пам'яті процесу воркерів
-  unset DB_ROOT_PASSWORD
-fi
-
-# 3. Підготовка Laravel
-php artisan storage:link --no-interaction || true
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-php artisan migrate --force
-
-# 4. Запуск FrankenPHP
-exec frankenphp run --config /etc/caddy/Caddyfile
+sudo ./backup.sh                      # Миттєвий бекап MariaDB у gzip
+# Щоденний бекап о 03:00 UTC (зберігання 7 днів у /var/backups/mariadb/):
+(crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/mariadb-backup.sh >> /var/log/mariadb-backup.log 2>&1") | crontab -
 ```
 
-### Управління стеком
+---
 
-```bash
-sudo ./deploy-services.sh --status    # Статус
-sudo ./deploy-services.sh --logs      # Логи
-sudo ./deploy-services.sh --restart   # Перезапуск
-sudo ./deploy-services.sh --pull      # Оновлення образів
-sudo ./deploy-services.sh --stop      # Зупинка
-```
+## Шаблони додатків
 
-### Резервні копії
-
-```bash
-cd services/mariadb-redis
-sudo ./backup.sh          # Запустити резервне копіювання
-sudo ./backup.sh --list   # Список резервних копій
-sudo ./backup.sh --cron   # Щоденний cron о 03:00 UTC
-```
+У директорії [`templates/laravel-frankenphp/`](../templates/laravel-frankenphp/) доступний готовий шаблон для Laravel:
+- Сервер FrankenPHP на Caddy з підтримкою HTTP/3 та worker-режиму.
+- Автовиявлення MariaDB та Redis у внутрішній мережі Docker.
+- Автоматичне створення бази даних і користувача при першому запуску.
+- Автоматичний запуск міграцій (`migrate --force`) та кешування конфігурації.
 
 ---
 
 ## Оновлення OpenShip
 
 ```bash
-sudo ./update.sh --check   # Перевірити оновлення
-sudo ./update.sh           # Застосувати
+sudo ./update.sh --check   # Перевірити наявність оновлень
+sudo ./update.sh           # Застосувати оновлення
 ```
 
 ---
 
-## Діагностика
+## Структура репозиторію
 
-```bash
-sudo ./doctor.sh
+```text
+OpenShip-deploy/
+├── install.sh                  # Автоматичний інсталятор Control Plane
+├── doctor.sh                   # Діагностика системи та сервісів OpenShip
+├── update.sh                   # Скрипт оновлення OpenShip
+├── deploy-services.sh          # Керування стеком MariaDB + Redis
+├── backup.sh                   # Скрипт резервного копіювання баз даних
+├── docker-compose.yml          # Compose-файл баз даних для деплою з OpenShip
+├── openship.json               # Маніфест OpenShip
+├── templates/
+│   └── laravel-frankenphp/     # Шаблон для деплою Laravel + FrankenPHP
+└── docs/
+    ├── README.ru.md            # Документація російською
+    └── README.ua.md            # Документація українською
 ```
-
-Перевіряє: ОС · архітектура · CPU/RAM/диск · swap · стан інсталятора · OpenShip CLI · статус OpenShip · Node/Bun · Docker · порти · SSH · UFW · Fail2ban
-
----
-
-## Логи та стан
-
-| Файл | Вміст |
-|---|---|
-| `/var/log/openship-control-install.log` | Лог встановлення |
-| `/var/log/openship-control-update.log` | Лог оновлень |
-| `/var/log/openship-control-doctor.log` | Лог діагностики |
-| `/etc/openship-control/install.conf` | Стан інсталятора |
-
-> [!NOTE]
-> Пароль адміністратора OpenShip **не зберігається** у state-файлі.
 
 ---
 
 ## Вимоги
 
-- **ОС**: Ubuntu 24.04 LTS
-- **Доступ**: root або sudo
-- **RAM**: мінімум 768 MiB (Bare) · 2 GB+ рекомендується (Standard)
-- **Диск**: мінімум 10 GB вільно
-- **Архітектура**: amd64 або arm64
-
----
-
-## Документація OpenShip
-
-[openship.io/docs](https://openship.io/docs/)
+- **ОС**: Ubuntu 24.04 LTS (amd64 / arm64)
+- **Права**: root або sudo
+- **Control VPS**: від 1 ГБ RAM (у режимі Bare), 10 ГБ диску
+- **Worker VPS**: від 2–8 ГБ RAM (під навантаження додатків)
 
 ---
 

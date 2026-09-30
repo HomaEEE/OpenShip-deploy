@@ -16,12 +16,32 @@
 
 ---
 
-## Overview
+## Quick Start
 
-**OpenShip Deploy** is an automated, production-ready toolkit designed for:
-1. **Control Plane Provisioning**: Prepares a clean Ubuntu 24.04 LTS VPS as a dedicated OpenShip Control Plane with security hardening, automated updates, and diagnostics.
-2. **Worker Database Services**: Provides an isolated, pre-tuned **MariaDB 11.4 LTS + Redis 7.4 Alpine** stack accessible exclusively via the internal Docker network (`openship-openship-deploy`, configurable via `OPENSHIP_NETWORK`).
-3. **Application Templates**: Includes a production-ready **Laravel + FrankenPHP** template with auto-provisioning databases, zero-config migrations, and OpenShip domain routing.
+### 1. Control Plane Provisioning
+Set up a clean Ubuntu 24.04 LTS VPS with security hardening, swap, UFW, Caddy, and OpenShip:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
+```
+
+Or clone and inspect before running:
+```bash
+git clone https://github.com/HomaEEE/OpenShip-deploy.git
+cd OpenShip-deploy && chmod +x *.sh
+sudo ./install.sh
+```
+
+### 2. System & OpenShip Diagnostics (`doctor.sh`)
+Validate your Control Plane status, Caddy reverse-proxy routing, ports, and firewall rules in one command:
+
+```bash
+# Run directly via curl (no clone needed)
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/doctor.sh | sudo bash
+
+# Or locally if cloned
+sudo ./doctor.sh
+```
 
 ---
 
@@ -34,15 +54,15 @@
                        │
        ┌───────────────┴───────────────┐
        │                               │
- os.example.com                   noire.od.ua (apps)
+ os.example.com                   apps.example.com
        │                               │
-  Control VPS                      Prod VPS
- Ubuntu 24.04, 1–2 GB           Ubuntu 24.04, 4–8 GB
+  Control VPS                      Worker VPS
+ Ubuntu 24.04 (1–2 GB)            Ubuntu 24.04 (4–8 GB)
        │                               │
- OpenShip Edge :80/:443         OpenShip Edge :80/:443
-       │                               │
- OpenShip Bare :3001            Laravel (FrankenPHP)
-  (Control Plane daemon)               │ (openship-openship-deploy)
+  Caddy :80/:443                  OpenShip Edge :80/:443
+   ├── :3001 (Dashboard UI)            │
+   └── :4000 (API & WebSockets)    Laravel (FrankenPHP)
+       │                               │ (openship-openship-deploy)
        │                        ┌──────┴──────┐
        │                        │             │
        │                   MariaDB:3306  Redis:6379
@@ -51,191 +71,99 @@
 ```
 
 > [!IMPORTANT]
-> **Key Invariant**: The Control VPS is **never in the HTTP request path** of production applications.
-> If the Control VPS goes down, all production apps continue running without interruption.
+> **Key Invariant**: The Control VPS is **never in the HTTP request path** of production apps. If the Control VPS goes down, all production apps continue running uninterrupted.
 
 ---
 
-## Control Plane Installation
+## Control Plane Setup
 
 ### Runtime Modes
 
-| Mode | OpenShip Runtime | Proxy (:80/:443) | Docker | Min RAM | Best for |
-|---|---|---|---|---|---|
-| **Bare** *(recommended)* | Native process + embedded DB | Edge container | Edge only | 1 GB | Dedicated Control Plane |
-| **Standard** | Docker Compose | Edge container | Full stack | 2 GB | Full Docker environment |
+| Mode | Runtime | Proxy | Min RAM | Use Case |
+|---|---|---|---|---|
+| **Bare** *(Recommended)* | Native process + embedded DB | Caddy reverse proxy | 1 GB | Dedicated Control VPS (efficient, fast) |
+| **Standard** | Docker Compose stack | OpenShip Edge container | 2 GB | Full Docker-based setup |
 
-On 1–2 GB VPS instances **Bare mode is recommended**: OpenShip runs as a lightweight native systemd service with an embedded database. Docker is used exclusively for the Edge container routing the control plane domain.
-
-<details open>
-<summary><b>🚀 Option A — One-liner (Recommended for fresh VPS)</b></summary>
-<br>
-
-Runs the automated, interactive installer in a single command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
-```
-</details>
-
-<details>
-<summary><b>📦 Option B — Clone & Run</b></summary>
-<br>
-
-Clone the repository locally to inspect scripts before execution:
-
-```bash
-git clone https://github.com/HomaEEE/OpenShip-deploy.git
-cd OpenShip-deploy
-chmod +x *.sh
-sudo ./install.sh
-```
-</details>
-
-<details>
-<summary><b>⚡ Option C — Pre-hardening + Upstream Wizard (install-interactive.sh)</b></summary>
-<br>
-
-Automatically configures server security & environment (swap, sysctl, journald, UFW, Fail2ban, Docker), downloads the official OpenShip CLI from `openship.io`, and hands over full interactive control directly to OpenShip's setup wizard:
-
-**One-liner (interactive mode selection):**
-```bash
-curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
-```
-
-**Direct Bare mode (embedded DB, ~150 MB RAM):**
-```bash
-curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash -s -- --bare
-```
-
-**Or via clone:**
-```bash
-sudo ./install-interactive.sh --bare
-```
-</details>
-
-### What `install.sh` does
-
-1. Validates OS (Ubuntu 24.04 LTS), root/sudo privileges, architecture (`amd64`/`arm64`).
-2. Checks available RAM and automatically configures swap if needed.
-3. Hardens SSH (preserves key access, disables root password login if keys exist).
-4. Configures UFW firewall (SSH, and Edge ports `:80/:443` when public domain is configured).
-5. Configures Fail2ban for brute-force protection.
-6. Installs official Docker Engine and Compose plugin.
-7. Installs Node.js / Bun runtime for OpenShip daemon.
-8. Launches OpenShip first-time setup (`--bare --non-interactive`).
-9. Polls API health-check; rolls back automatically on failure.
-10. Prints post-install verification summary and login URL.
+### Caddy Reverse Proxy (Bare Mode)
+In Bare mode, Caddy handles public ingress and routes traffic internally:
+- `handle_path /api/proxy/*` → `127.0.0.1:4000` (OpenShip API & terminal WebSockets)
+- `handle /api/*` → `127.0.0.1:4000` (Direct API endpoints)
+- `handle` → `127.0.0.1:3001` (Dashboard UI)
+- Ports `3001` and `4000` are strictly blocked from external access via UFW.
 
 ---
 
-## Host Control Mode
+## Diagnostics (`doctor.sh`)
 
-During installation you choose whether OpenShip should manage the Control VPS as an execution server:
+[`doctor.sh`](doctor.sh) is a comprehensive diagnostic utility for the OpenShip Control Plane.
 
-| Option | Dashboard terminal | Server in OpenShip | Notes |
-|---|---|---|---|
-| **Full control** *(default)* | ✅ Works | ✅ Visible | Recommended |
-| **Strict isolation** (`--no-host-control`) | ❌ Blocked | ❌ Hidden | Maximum isolation |
-
----
-
-## Domain Configuration
-
-| Option | How it works |
-|---|---|
-| **Caddy reverse proxy** *(Recommended)* | Caddy handles `:80` (HTTP) or `:443` (HTTPS) and proxies to internal `127.0.0.1:3001`. Port 3001 is closed in UFW for security. Works with direct IP or custom domain with auto-TLS. |
-| **Public HTTPS domain (Edge)** | OpenShip Edge (:80/:443 container) handles TLS via Let's Encrypt (HTTP-01 challenge). Point DNS/Cloudflare A-record to this VPS IP. |
-| **Private / local** | Dashboard stays on internal port 3001. Only SSH is exposed in UFW. Access via Cloudflare Tunnel or VPN. |
-
----
-
-## Shared Database Services (MariaDB + Redis)
-
-For production/worker nodes, this repository provides a dedicated **MariaDB 11.4 LTS + Redis 7.4 Alpine** stack.
-
-### 1. Direct OpenShip Deployment (Recommended)
-This repository contains a root `docker-compose.yml` and `openship.json`. You can add this repository as a project in your OpenShip dashboard and deploy it directly with zero configuration:
-
-- **Network**: Registers in `openship-openship-deploy` (or `OPENSHIP_NETWORK`) under aliases `mariadb` and `redis`.
-- **Security**: Ports `3306` and `6379` are **not exposed to the host or internet**. Accessible only to containers on `openship-openship-deploy`.
-
-### 2. Manual CLI Deployment
-```bash
-# On the worker node
-cd OpenShip-deploy
-sudo ./deploy-services.sh
-```
-
-Management commands:
-```bash
-sudo ./deploy-services.sh --status    # Check container health
-sudo ./deploy-services.sh --logs      # View live logs
-sudo ./deploy-services.sh --restart   # Restart services
-sudo ./deploy-services.sh --stop      # Stop (volumes preserved)
-```
-
-### 3. Automated Backups
-The included [`backup.sh`](backup.sh) script creates compressed daily database dumps with automatic 7-day retention:
+### Running Diagnostics
 
 ```bash
-# Run backup immediately
-sudo ./backup.sh
+# Direct run
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/doctor.sh | sudo bash
 
-# Install daily cron job (runs at 03:00 UTC)
-(crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/mariadb-backup.sh >> /var/log/mariadb-backup.log 2>&1") | crontab -
-```
-Backups are stored in `/var/backups/mariadb/`.
-
----
-
-## Deploying Laravel Applications
-
-Use the ready-to-go universal template in [`templates/laravel-frankenphp/`](templates/laravel-frankenphp/):
-
-1. Copy `deploy/`, `openship.json`, and `.github/workflows/deploy.yml` into your Laravel project root.
-2. In OpenShip project settings, configure:
-   - `DB_DATABASE=your_app`
-   - `DB_USERNAME=your_app`
-   - `DB_PASSWORD=your_secure_password`
-   - `DB_ROOT_PASSWORD=openship_root_secret` (only needed during first deploy; wiped from memory after creation)
-   - `APP_KEY=base64:...`
-3. On first startup, `entrypoint.sh`:
-   - Auto-discovers MariaDB and Redis in `openship-openship-deploy`.
-   - Creates the database and user automatically via PHP PDO.
-   - Runs migrations (`php artisan migrate --force`).
-   - Caches configs, routes, views, icons.
-   - Starts FrankenPHP on port 80 with Cloudflare/OpenShip trusted proxy support.
-
----
-
-## Updating OpenShip
-
-```bash
-sudo ./update.sh --check   # Check for available updates
-sudo ./update.sh           # Apply update
-```
-
----
-
-## Diagnostics
-
-```bash
+# Local run
 sudo ./doctor.sh
 ```
 
-Checks: OS · architecture · CPU/RAM/disk · swap · installer state · OpenShip CLI · OpenShip status · Node/Bun · Docker · listening ports · SSH · UFW · Fail2ban
+### What `doctor.sh` Validates
+
+| Check | What is Verified |
+|---|---|
+| **Host Resources** | OS version, Kernel, CPU cores, RAM, Swap, Free disk space |
+| **Control Plane** | CLI installation, version, systemd service state (`openship.service`) |
+| **Caddy Proxy** | Caddy active status, Caddyfile routing (`:3001` UI and `:4000` API/WS) |
+| **Listening Ports** | `ss -lntp` validation for SSH, `:3001` (Dashboard), `:4000` (API) |
+| **Docker & Sockets** | Daemon health, `/var/run/docker.sock` accessibility for Host Control |
+| **Firewall (UFW)** | Ports `:80`, `:443`, SSH allowed; `:3001` and `:4000` closed to public |
+| **Security** | Fail2ban service and SSH jail activity |
+
+*Diagnostics automatically log to `/var/log/openship-doctor.log`.*
 
 ---
 
-## Logs & State
+## Worker Databases (MariaDB + Redis)
 
-| File | Contents |
-|---|---|
-| `/var/log/openship-control-install.log` | Installation log |
-| `/var/log/openship-control-update.log` | Update log |
-| `/var/log/openship-control-doctor.log` | Diagnostic log |
-| `/etc/openship-control/install.conf` | Installer state |
+For production application nodes:
+
+### Direct OpenShip Deploy
+Add this repo as an OpenShip project. The root `docker-compose.yml` launches **MariaDB 11.4 LTS + Redis 7.4 Alpine** into `openship-openship-deploy`. Ports are not exposed to the internet.
+
+### CLI Deploy & Management
+```bash
+sudo ./deploy-services.sh             # Start stack
+sudo ./deploy-services.sh --status    # Check container health
+sudo ./deploy-services.sh --logs      # Stream logs
+sudo ./deploy-services.sh --restart   # Restart stack
+sudo ./deploy-services.sh --stop      # Stop stack (data preserved)
+```
+
+### Automated Backups
+```bash
+sudo ./backup.sh                      # Instant compressed MariaDB backup
+# Cron daily backup at 03:00 UTC (7-day retention in /var/backups/mariadb/):
+(crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/mariadb-backup.sh >> /var/log/mariadb-backup.log 2>&1") | crontab -
+```
+
+---
+
+## Application Templates
+
+[`templates/laravel-frankenphp/`](templates/laravel-frankenphp/) provides a zero-downtime, production-ready Laravel 11/12 template:
+- FrankenPHP Caddy-based server on port 80 with HTTP/3 and worker mode.
+- Auto-discovers MariaDB and Redis on the internal network.
+- Automatically provisions database and user via PDO on first boot.
+- Runs `artisan migrate --force` and caches configuration/routes/views.
+
+---
+
+## Maintenance & Updates
+
+```bash
+sudo ./update.sh --check   # Check for OpenShip updates
+sudo ./update.sh           # Apply update
+```
 
 ---
 
@@ -243,51 +171,28 @@ Checks: OS · architecture · CPU/RAM/disk · swap · installer state · OpenShi
 
 ```text
 OpenShip-deploy/
-├── install.sh                  # Control Plane provisioner
+├── install.sh                  # Control Plane automated installer
+├── doctor.sh                   # System & OpenShip diagnostic tool
 ├── update.sh                   # OpenShip update helper
-├── doctor.sh                   # System & service diagnostics
-├── deploy-services.sh          # Worker database stack runner
+├── deploy-services.sh          # Worker MariaDB + Redis stack manager
 ├── backup.sh                   # Automated MariaDB backup script
-├── docker-compose.yml          # Root MariaDB + Redis compose (for OpenShip Git deploy)
+├── docker-compose.yml          # Root MariaDB + Redis compose for OpenShip Git deploy
 ├── openship.json               # OpenShip descriptor
-├── .env.example                # Environment variables reference
-├── config/
-│   └── defaults.env.example    # Installer defaults
-├── docs/
-│   ├── README.ru.md            # Документация на русском
-│   └── README.ua.md            # Документація українською
-├── services/
-│   └── mariadb-redis/          # Shared database stack source
-└── templates/
-    └── laravel-frankenphp/     # Universal Laravel + FrankenPHP deploy template
-        ├── deploy/
-        │   ├── Caddyfile
-        │   ├── Dockerfile
-        │   ├── docker-compose.yml
-        │   ├── entrypoint.sh
-        │   └── php.ini
-        ├── openship.json
-        ├── .github/workflows/deploy.yml
-        └── README.md
+├── templates/
+│   └── laravel-frankenphp/     # Production Laravel + FrankenPHP deploy template
+└── docs/
+    ├── README.ru.md            # Документация на русском
+    └── README.ua.md            # Документація українською
 ```
 
 ---
 
 ## Requirements
 
-- **OS**: Ubuntu 24.04 LTS
-- **Access**: root or sudo
-- **RAM**: 1 GB minimum (Bare) · 2 GB+ recommended (Standard)
-- **Disk**: 10 GB free minimum
-- **Arch**: amd64 or arm64
-
----
-
-## Official Documentation
-
-- [openship.io/docs](https://openship.io/docs/)
-- [Laravel Documentation](https://laravel.com/docs)
-- [FrankenPHP Documentation](https://frankenphp.dev/)
+- **OS**: Ubuntu 24.04 LTS (amd64 / arm64)
+- **Privileges**: root or sudo
+- **Control VPS**: 1 GB+ RAM (Bare mode), 10 GB disk
+- **Worker VPS**: 2–8 GB+ RAM (depending on workload)
 
 ---
 
