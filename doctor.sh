@@ -56,6 +56,14 @@ echo
 
 if [[ -f "$STATE_FILE" ]]; then
     ok "Installer state exists: $STATE_FILE"
+    # Sanitize state file in case values with spaces were saved unquoted
+    tmp_state="${STATE_FILE}.tmp"
+    while IFS="=" read -r key val || [[ -n "$key" ]]; do
+        [[ -z "$key" || "$key" =~ ^# ]] && echo "$key" && continue
+        val="${val#\"}"
+        val="${val%\"}"
+        echo "${key}=\"${val}\""
+    done < "$STATE_FILE" > "$tmp_state" 2>/dev/null && mv -f "$tmp_state" "$STATE_FILE" 2>/dev/null || rm -f "$tmp_state"
     # shellcheck disable=SC1090
     source "$STATE_FILE"
     echo "  Mode:         ${INSTALL_MODE:-unknown}"
