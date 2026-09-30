@@ -9,7 +9,8 @@
 [![amd64 · arm64](https://img.shields.io/badge/arch-amd64%20·%20arm64-blue)](#requirements)
 [![License MIT](https://img.shields.io/badge/license-MIT-green)](#license)
 
-[🇷🇺 Русский](docs/README.ru.md) · [🇺🇦 Українська](docs/README.ua.md)
+| 🇬🇧 **English** | [🇷🇺 Русский](docs/README.ru.md) | [🇺🇦 Українська](docs/README.ua.md) |
+| :---: | :---: | :---: |
 
 </div>
 
@@ -66,13 +67,22 @@
 
 On 1–2 GB VPS instances **Bare mode is recommended**: OpenShip runs as a lightweight native systemd service with an embedded database. Docker is used exclusively for the Edge container routing the control plane domain.
 
-### Option A — One-liner (recommended for fresh VPS)
+<details open>
+<summary><b>🚀 Option A — One-liner (Recommended for fresh VPS)</b></summary>
+<br>
+
+Runs the automated, interactive installer in a single command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
 ```
+</details>
 
-### Option B — Clone and run
+<details>
+<summary><b>📦 Option B — Clone & Run</b></summary>
+<br>
+
+Clone the repository locally to inspect scripts before execution:
 
 ```bash
 git clone https://github.com/HomaEEE/OpenShip-deploy.git
@@ -80,19 +90,24 @@ cd OpenShip-deploy
 chmod +x *.sh
 sudo ./install.sh
 ```
+</details>
 
-### Option C — Pre-hardening + Upstream Wizard (`install-interactive.sh`)
+<details>
+<summary><b>⚡ Option C — Pre-hardening + Upstream Wizard (install-interactive.sh)</b></summary>
+<br>
 
 Automatically configures server security & environment (swap, sysctl, journald, UFW, Fail2ban, Docker), downloads the official OpenShip CLI from `openship.io`, and hands over full interactive control directly to OpenShip's setup wizard:
 
+**One-liner:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
 ```
 
-Or via clone:
+**Or via clone:**
 ```bash
 sudo ./install-interactive.sh
 ```
+</details>
 
 ### What `install.sh` does
 

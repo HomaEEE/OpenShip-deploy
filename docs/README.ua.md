@@ -8,7 +8,8 @@
 [![Bash](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![amd64 · arm64](https://img.shields.io/badge/arch-amd64%20·%20arm64-blue)](#вимоги)
 
-[🇬🇧 English](../README.md) · [🇷🇺 Русский](README.ru.md)
+| [🇬🇧 English](../README.md) | [🇷🇺 Русский](README.ru.md) | 🇺🇦 **Українська** |
+| :---: | :---: | :---: |
 
 </div>
 
@@ -59,13 +60,22 @@
 
 ## Встановлення
 
-### Варіант A — одна команда (рекомендується для чистого VPS)
+<details open>
+<summary><b>🚀 Варіант A — Одна команда (Рекомендується для чистого VPS)</b></summary>
+<br>
+
+Запуск інтерактивного інсталятора однією командою:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install.sh | sudo bash
 ```
+</details>
 
-### Варіант B — клонування
+<details>
+<summary><b>📦 Варіант B — Клонування репозиторію</b></summary>
+<br>
+
+Клонування репозиторію для попереднього перегляду скриптів:
 
 ```bash
 git clone https://github.com/HomaEEE/OpenShip-deploy.git
@@ -73,19 +83,24 @@ cd OpenShip-deploy
 chmod +x *.sh
 sudo ./install.sh
 ```
+</details>
 
-### Варіант C — Попереднє налаштування + візард OpenShip (`install-interactive.sh`)
+<details>
+<summary><b>⚡ Варіант C — Попереднє налаштування + візард OpenShip (install-interactive.sh)</b></summary>
+<br>
 
 Автоматично виконує системну підготовку та hardening (swap, sysctl, journald, UFW, Fail2ban, Docker) без зайвих запитань, завантажує CLI з `openship.io` та передає 100% інтерактивний контроль офіційному візарду OpenShip:
 
+**Одна команда:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
 ```
 
-Або через клонування:
+**Або через клонування:**
 ```bash
 sudo ./install-interactive.sh
 ```
+</details>
 
 Інсталятор **повністю інтерактивний** — параметри командного рядка не потрібні.
 
