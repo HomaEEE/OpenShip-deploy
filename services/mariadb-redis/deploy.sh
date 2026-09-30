@@ -5,7 +5,7 @@
 # ==============================================================================
 #
 # Deploys and manages isolated MariaDB and Redis containers connected to the
-# shared Docker network (openship-network).
+# shared Docker network (openship_default).
 #
 # Usage:
 #   sudo ./deploy.sh              # Deploy / update stack
@@ -85,12 +85,10 @@ ensure_docker_and_compose() {
 }
 
 ensure_docker_network() {
-    if ! docker network inspect openship-network >/dev/null 2>&1; then
-        log "Creating shared Docker network: openship-network..."
-        docker network create openship-network
-        success "Network openship-network created."
+    if ! docker network inspect openship_default >/dev/null 2>&1; then
+        die "Docker network 'openship_default' not found. Please start OpenShip first before deploying database services."
     else
-        log "Network openship-network already exists."
+        log "Found existing OpenShip Docker network: openship_default"
     fi
 }
 
@@ -200,7 +198,7 @@ start_services() {
     echo
 
     if [[ "$healthy" == "true" ]]; then
-        success "MariaDB and Redis are healthy and running on openship-network!"
+        success "MariaDB and Redis are healthy and running on openship_default!"
     else
         warn "Containers started, but health checks are taking longer than usual."
         warn "MariaDB status: $(docker inspect --format='{{json .State.Health.Status}}' mariadb 2>/dev/null || echo 'not found')"
@@ -234,8 +232,8 @@ show_status() {
     docker ps -a --filter "name=mariadb" --filter "name=redis" --format "table {{.Names}}\t{{.Status}}\t{{.Networks}}"
 
     echo
-    echo -e "${BOLD}Network (openship-network):${NC}"
-    docker network inspect openship-network --format '{{range .Containers}}{{.Name}} ({{.IPv4Address}}){{"\n"}}{{end}}' 2>/dev/null || echo "Network not found."
+    echo -e "${BOLD}Network (openship_default):${NC}"
+    docker network inspect openship_default --format '{{range .Containers}}{{.Name}} ({{.IPv4Address}}){{"\n"}}{{end}}' 2>/dev/null || echo "Network not found."
 
     echo
     echo -e "${BOLD}Volumes:${NC}"
@@ -265,7 +263,7 @@ services:
 
 networks:
   default:
-    name: openship-network
+    name: openship_default
     external: true
 EOF
     echo "------------------------------------------------------------"

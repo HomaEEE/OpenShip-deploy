@@ -133,7 +133,7 @@ sudo ./deploy-services.sh
 # docker-compose.yml проекта
 networks:
   default:
-    name: openship-network
+    name: openship_default
     external: true
 ```
 

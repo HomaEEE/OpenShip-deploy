@@ -152,8 +152,8 @@ if command -v docker >/dev/null 2>&1; then
             fi
         done
 
-        if docker network inspect openship-network >/dev/null 2>&1; then
-            ok "Docker network 'openship-network' is active"
+        if docker network inspect openship_default >/dev/null 2>&1; then
+            ok "Docker network 'openship_default' is active"
         fi
     else
         if [[ "${OPENSHIP_ROLE:-control}" == "control" ]]; then

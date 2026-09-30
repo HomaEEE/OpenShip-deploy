@@ -40,7 +40,7 @@ services:
     volumes:
       - app_storage:/app/storage
     networks:
-      - openship-network
+      - openship_default
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:80/ || exit 1"]
       interval: 10s
@@ -53,6 +53,6 @@ volumes:
     name: ${APP_SLUG:-app}_storage
 
 networks:
-  openship-network:
-    name: openship-network
+  openship_default:
+    name: openship_default
     external: true
