@@ -1773,6 +1773,33 @@ wait_for_api_healthy() {
 # Caddy Reverse Proxy
 # ------------------------------------------------------------------------------
 
+install_caddy_package() {
+    rm -f /etc/apt/sources.list.d/caddy*.sources /etc/apt/sources.list.d/caddy*.list /etc/apt/trusted.gpg.d/caddy*.gpg /usr/share/keyrings/caddy*.gpg
+
+    local arch
+    arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+    [[ "$arch" == "x86_64" ]] && arch="amd64"
+    [[ "$arch" == "aarch64" ]] && arch="arm64"
+
+    local tag ver deb_url
+    tag="$(basename "$(curl -sIL -o /dev/null -w '%{url_effective}' https://github.com/caddyserver/caddy/releases/latest 2>/dev/null)")"
+    ver="${tag#v}"
+    if [[ -n "$ver" && "$ver" =~ ^[0-9]+\.[0-9]+ ]]; then
+        deb_url="https://github.com/caddyserver/caddy/releases/download/${tag}/caddy_${ver}_linux_${arch}.deb"
+    else
+        deb_url="https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_${arch}.deb"
+    fi
+
+    if ! curl -fsSL "$deb_url" -o /tmp/caddy.deb || [[ ! -s /tmp/caddy.deb ]]; then
+        curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_${arch}.deb" -o /tmp/caddy.deb
+    fi
+
+    dpkg -i /tmp/caddy.deb || (apt-get install -f -y -qq && dpkg -i /tmp/caddy.deb)
+    rm -f /tmp/caddy.deb
+
+    command -v caddy >/dev/null 2>&1
+}
+
 configure_caddy() {
     if [[ "${OPENSHIP_PROXY_MODE:-none}" != "caddy" ]]; then
         return
@@ -1781,20 +1808,7 @@ configure_caddy() {
     section "Caddy Reverse Proxy"
 
     if ! command_exists caddy; then
-        run_task "Installing Caddy web server" bash -c "
-            rm -f /etc/apt/sources.list.d/caddy-stable.sources /etc/apt/sources.list.d/caddy-stable.list
-            local arch=\"\$(dpkg --print-architecture 2>/dev/null || uname -m)\"
-            [[ \"\$arch\" == \"x86_64\" ]] && arch=\"amd64\"
-            [[ \"\$arch\" == \"aarch64\" ]] && arch=\"arm64\"
-            local deb_url=\"\$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest 2>/dev/null | grep -oE 'https://[^\"]+linux_'\"\$arch\"'\.deb' | head -n 1)\"
-            if [[ -z \"\$deb_url\" ]]; then
-                deb_url=\"https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_\${arch}.deb\"
-            fi
-            curl -fsSL \"\$deb_url\" -o /tmp/caddy.deb
-            dpkg -i /tmp/caddy.deb || apt-get install -f -y -qq
-            rm -f /tmp/caddy.deb
-            command -v caddy >/dev/null 2>&1
-        "
+        run_task "Installing Caddy web server" install_caddy_package
     else
         success "Caddy is already installed."
     fi
@@ -1816,7 +1830,7 @@ configure_caddy() {
         chmod 640 /etc/caddy/certs/*.key 2>/dev/null || true
     fi
 
-    run_task "Configuring Caddyfile (${site_address} -> :3001, :4000)" bash -c "
+    write_caddyfile() {
         mkdir -p /etc/caddy
         cat > /etc/caddy/Caddyfile <<EOF
 ${site_address} {
@@ -1849,20 +1863,25 @@ ${proto_header}
     }
 }
 EOF
+        chmod 644 /etc/caddy/Caddyfile
         systemctl enable caddy
         systemctl restart caddy
-    "
+    }
 
-    run_task "Verifying Caddy service health" bash -c "
+    run_task "Configuring Caddyfile (${site_address} -> :3001, :4000)" write_caddyfile
+
+    verify_caddy_service() {
         for i in {1..5}; do
             if systemctl is-active --quiet caddy; then
-                exit 0
+                return 0
             fi
             sleep 1
         done
         journalctl -u caddy --no-pager -n 20
-        exit 1
-    "
+        return 1
+    }
+
+    run_task "Verifying Caddy service health" verify_caddy_service
 
     success "Caddy configured and running for ${OPENSHIP_PUBLIC_URL}"
 }
