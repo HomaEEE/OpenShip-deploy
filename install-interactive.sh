@@ -403,14 +403,14 @@ configure_ufw() {
     SSH_PORT="$(detect_ssh_port)"
     log "Active SSH port detected: ${SSH_PORT}"
 
-    ufw default deny incoming >/dev/null 2>&1
-    ufw default allow outgoing >/dev/null 2>&1
+    ufw default deny incoming
+    ufw default allow outgoing
 
-    ufw allow "${SSH_PORT}/tcp" comment "SSH" >/dev/null 2>&1
-    ufw allow 80/tcp comment "HTTP (OpenShip Edge / Let's Encrypt)" >/dev/null 2>&1
-    ufw allow 443/tcp comment "HTTPS (OpenShip Edge / Dashboard)" >/dev/null 2>&1
+    ufw allow "${SSH_PORT}/tcp" comment "SSH" || ufw allow "${SSH_PORT}/tcp"
+    ufw allow 80/tcp comment "HTTP" || ufw allow 80/tcp
+    ufw allow 443/tcp comment "HTTPS" || ufw allow 443/tcp
 
-    ufw --force enable >/dev/null 2>&1
+    ufw --force enable
 
     success "UFW enabled (ports: ${SSH_PORT}/tcp, 80/tcp, 443/tcp allowed)."
 }
