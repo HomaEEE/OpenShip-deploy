@@ -612,7 +612,11 @@ collect_bare_openship_credentials() {
 
     OPENSHIP_DOMAIN_KIND="none"
     OPENSHIP_PUBLIC_URL=""
-    OPENSHIP_HOST=""
+    local default_host="${OPENSHIP_HOST:-}"
+    if [[ -z "$default_host" && "$HOSTNAME_INPUT" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
+        default_host="$HOSTNAME_INPUT"
+    fi
+    OPENSHIP_HOST="$default_host"
     OPENSHIP_EDGE_ENABLED="false"
     OPENSHIP_PROXY_MODE="none"
     CADDY_SSL_MODE="auto"
@@ -635,6 +639,10 @@ collect_bare_openship_credentials() {
     echo
     echo "  4) Cancel"
     echo
+    if [[ -n "$default_host" ]]; then
+        echo -e "  ${DIM}Pre-filled domain from hostname: ${BOLD}${default_host}${NC}"
+        echo
+    fi
 
     while true; do
         read -r -p "Select [3]: " reachability </dev/tty
@@ -646,7 +654,7 @@ collect_bare_openship_credentials() {
                 OPENSHIP_EDGE_ENABLED="true"
                 OPENSHIP_PROXY_MODE="edge"
                 while true; do
-                    OPENSHIP_HOST="$(ask_default "OpenShip domain (e.g. os.example.com)" "")"
+                    OPENSHIP_HOST="$(ask_default "OpenShip domain" "${default_host:-os.example.com}")"
                     if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
                         break
                     fi
@@ -665,14 +673,18 @@ collect_bare_openship_credentials() {
                 OPENSHIP_DOMAIN_KIND="byo"
                 OPENSHIP_EDGE_ENABLED="false"
                 OPENSHIP_PROXY_MODE="caddy"
-                OPENSHIP_HOST="$(ask_default "OpenShip domain (e.g. os.example.com, or press Enter for direct IP on :80)" "")"
+                if [[ -n "$default_host" ]]; then
+                    OPENSHIP_HOST="$(ask_default "OpenShip domain" "$default_host")"
+                else
+                    OPENSHIP_HOST="$(ask_default "OpenShip domain (or press Enter for direct IP on :80)" "")"
+                fi
                 if [[ -n "$OPENSHIP_HOST" ]]; then
                     while true; do
                         if [[ "$OPENSHIP_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]]; then
                             break
                         fi
                         warn "Enter a valid DNS hostname, for example os.example.com."
-                        OPENSHIP_HOST="$(ask_default "OpenShip domain" "")"
+                        OPENSHIP_HOST="$(ask_default "OpenShip domain" "$default_host")"
                     done
                     OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
 
@@ -1414,15 +1426,18 @@ configure_unattended_upgrades() {
 install_docker() {
     section "Docker Engine"
 
-    if [[ "$INSTALL_MODE" == "bare" && "${OPENSHIP_EDGE_ENABLED:-false}" != "true" ]]; then
-        log "Private Bare mode selected without OpenShip Edge."
+    if [[ "$INSTALL_MODE" == "bare" && "${OPENSHIP_EDGE_ENABLED:-false}" != "true" && "${OPENSHIP_NO_HOST_CONTROL:-false}" == "true" ]]; then
+        log "Bare mode with strict isolation (--no-host-control) and without Edge."
         log "Docker installation skipped."
         return
     fi
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        log "OpenShip Edge (:80/:443) container requires Docker Engine."
-        log "Docker will run solely the openship-edge container (no production apps)."
+        if [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" != "true" ]]; then
+            log "Host control is ENABLED: Docker Engine is required for OpenShip to monitor This Server."
+        elif [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
+            log "OpenShip Edge (:80/:443) container requires Docker Engine."
+        fi
     fi
 
     if command_exists docker; then
@@ -1496,7 +1511,11 @@ prepare_runtime_for_openship() {
             log "OpenShip Control Plane will run as a lightweight Bare process."
         fi
 
-        success "Bare runtime selected: OpenShip will start with --bare --no-host-control."
+        if [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" == "true" ]]; then
+            success "Bare runtime selected: OpenShip will start with --bare --no-host-control."
+        else
+            success "Bare runtime selected: OpenShip will start with --bare (host control enabled)."
+        fi
         return
     fi
 
@@ -1638,7 +1657,11 @@ run_openship_setup() {
     echo
 
     if [[ "$INSTALL_MODE" == "bare" ]]; then
-        echo "OpenShip will use the explicit --bare runtime mode with --no-host-control."
+        if [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" == "true" ]]; then
+            echo "OpenShip will use the explicit --bare runtime mode with --no-host-control."
+        else
+            echo "OpenShip will use the explicit --bare runtime mode with host control enabled."
+        fi
         echo "The interactive guided wizard will NOT be used."
         echo
         run_bare_openship_setup

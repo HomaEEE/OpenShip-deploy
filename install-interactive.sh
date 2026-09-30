@@ -258,6 +258,7 @@ check_resources() {
 parse_arguments() {
     INSTALL_MODE="${INSTALL_MODE:-}"
     CADDY_DOMAIN="${CADDY_DOMAIN:-}"
+    CADDY_SSL_MODE="${CADDY_SSL_MODE:-}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -277,8 +278,20 @@ parse_arguments() {
                 CADDY_DOMAIN="${1#*=}"
                 shift
                 ;;
+            --cf-flexible|--cloudflare-flexible)
+                CADDY_SSL_MODE="cloudflare_flexible"
+                shift
+                ;;
+            --ssl-mode|-m)
+                CADDY_SSL_MODE="${2:-}"
+                shift 2
+                ;;
+            --ssl-mode=*)
+                CADDY_SSL_MODE="${1#*=}"
+                shift
+                ;;
             --help|-h)
-                echo "Usage: sudo ./install-interactive.sh [--bare | --standard] [--domain <domain>]"
+                echo "Usage: sudo ./install-interactive.sh [--bare | --standard] [--domain <domain>] [--cf-flexible]"
                 exit 0
                 ;;
             *)
@@ -329,7 +342,7 @@ select_installation_mode() {
         echo "Caddy will expose ports :80/:443 and proxy directly to localhost:3001."
         echo "Port 3001 stays closed in UFW for maximum security."
         echo
-        echo "Enter domain for OpenShip (e.g. os.example.com for auto-HTTPS),"
+        echo "Enter domain for OpenShip (e.g. os.example.com),"
         echo "or press ENTER to serve over plain HTTP via server IP:"
         if [[ -e /dev/tty && -r /dev/tty ]]; then
             read -r -p "Domain []: " CADDY_DOMAIN </dev/tty || CADDY_DOMAIN=""
@@ -339,6 +352,27 @@ select_installation_mode() {
 
     if [[ -n "${CADDY_DOMAIN}" ]]; then
         success "Caddy domain: ${CADDY_DOMAIN}"
+
+        if [[ -z "${CADDY_SSL_MODE:-}" ]]; then
+            echo
+            echo "SSL mode for ${CADDY_DOMAIN} (Cloudflare / Let's Encrypt):"
+            echo "  1) Cloudflare Flexible (HTTP :80 on VPS, Cloudflare handles SSL) — Fixes 'Too Many Redirects'"
+            echo "  2) Full / Auto Let's Encrypt (HTTPS :443 on VPS, for Cloudflare Full or direct DNS)"
+            echo
+            local ssl_choice="1"
+            if [[ -e /dev/tty && -r /dev/tty ]]; then
+                read -r -p "Select SSL mode [1]: " ssl_choice </dev/tty || ssl_choice="1"
+                ssl_choice="${ssl_choice//[$'\r\n\t ']/}"
+                ssl_choice="${ssl_choice:-1}"
+            fi
+            if [[ "$ssl_choice" == "2" ]]; then
+                CADDY_SSL_MODE="auto"
+                success "SSL mode: Automatic Let's Encrypt / Full"
+            else
+                CADDY_SSL_MODE="cloudflare_flexible"
+                success "SSL mode: Cloudflare Flexible (HTTP :80, no redirect loop)"
+            fi
+        fi
     else
         success "Caddy: HTTP on port 80 (accessible by server IP)"
     fi
@@ -665,14 +699,25 @@ configure_caddy() {
 
     local caddyfile_content=""
     if [[ -n "${CADDY_DOMAIN}" ]]; then
-        caddyfile_content="${CADDY_DOMAIN} {
+        if [[ "${CADDY_SSL_MODE:-cloudflare_flexible}" == "cloudflare_flexible" ]]; then
+            caddyfile_content="http://${CADDY_DOMAIN} {
     reverse_proxy 127.0.0.1:3001 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto https
     }
 }"
-        log "Caddy: automatic Let's Encrypt TLS for https://${CADDY_DOMAIN}"
+            log "Caddy: Cloudflare Flexible on http://${CADDY_DOMAIN} (HTTP :80, no redirect loop)"
+        else
+            caddyfile_content="${CADDY_DOMAIN} {
+    reverse_proxy 127.0.0.1:3001 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}"
+            log "Caddy: automatic Let's Encrypt TLS for https://${CADDY_DOMAIN}"
+        fi
     else
         caddyfile_content=":80 {
     reverse_proxy 127.0.0.1:3001 {

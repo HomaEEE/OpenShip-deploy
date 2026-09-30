@@ -110,6 +110,26 @@ if [[ -f "$STATE_FILE" ]] || command -v openship >/dev/null 2>&1; then
     fi
 fi
 
+# Caddy Reverse Proxy checks
+if command -v caddy >/dev/null 2>&1; then
+    echo
+    log "Caddy Reverse Proxy"
+    if systemctl is-active --quiet caddy; then
+        ok "Caddy service is active"
+    else
+        fail "Caddy service is installed but NOT active"
+        FAILED=1
+    fi
+    if [[ -f /etc/caddy/Caddyfile ]]; then
+        if grep -q "127.0.0.1:3001" /etc/caddy/Caddyfile; then
+            ok "Caddyfile proxies to 127.0.0.1:3001"
+        fi
+        if grep -qE "^[a-zA-Z0-9.-]+ \{" /etc/caddy/Caddyfile && ! grep -qE "^http://" /etc/caddy/Caddyfile; then
+            echo "  ℹ Cloudflare SSL tip: if 'Too Many Redirects', switch Cloudflare SSL to 'Full' or prefix domain with 'http://' in /etc/caddy/Caddyfile."
+        fi
+    fi
+fi
+
 # Docker & Edge checks
 echo
 log "Docker Daemon & Edge Services"
@@ -164,7 +184,12 @@ if command -v docker >/dev/null 2>&1; then
     fi
 else
     if [[ "${OPENSHIP_ROLE:-control}" == "control" && "${OPENSHIP_EDGE_ENABLED:-false}" != "true" ]]; then
-        ok "Docker daemon: not required for private Bare Control Plane"
+        if [[ "${OPENSHIP_NO_HOST_CONTROL:-false}" != "true" ]]; then
+            fail "Docker daemon is NOT running! OpenShip reports 'connect ENOENT /var/run/docker.sock' because Host Control is enabled. Start Docker: 'systemctl enable --now docker'."
+            FAILED=1
+        else
+            ok "Docker daemon: not required (strict isolation --no-host-control active)"
+        fi
     elif [[ "${OPENSHIP_EDGE_ENABLED:-false}" == "true" ]]; then
         fail "Docker is required for OpenShip Edge (:80/:443)"
         FAILED=1
