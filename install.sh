@@ -1756,14 +1756,28 @@ configure_caddy() {
 
     if ! command_exists caddy; then
         run_task "Adding Caddy repository" bash -c "
-            apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
-            rm -f /etc/apt/sources.list.d/caddy-stable.sources
-            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes 2>/dev/null || true
-            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-            apt-get update -qq
+            mkdir -p /usr/share/keyrings /etc/apt/sources.list.d
+            rm -f /etc/apt/sources.list.d/caddy-stable.sources /etc/apt/sources.list.d/caddy-stable.list
+            curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+            chmod 644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+            echo 'deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' > /etc/apt/sources.list.d/caddy-stable.list
+            apt-get update -qq || true
         "
 
-        run_task "Installing Caddy web server" apt-get install -y -qq caddy
+        run_task "Installing Caddy web server" bash -c "
+            if ! apt-get install -y -qq caddy 2>/dev/null; then
+                local arch=\"\$(dpkg --print-architecture 2>/dev/null || uname -m)\"
+                [[ \"\$arch\" == \"x86_64\" ]] && arch=\"amd64\"
+                [[ \"\$arch\" == \"aarch64\" ]] && arch=\"arm64\"
+                local deb_url=\"\$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest 2>/dev/null | grep -oE 'https://[^\"]+linux_'\"\$arch\"'\.deb' | head -n 1)\"
+                if [[ -n \"\$deb_url\" ]]; then
+                    curl -fsSL \"\$deb_url\" -o /tmp/caddy.deb
+                    dpkg -i /tmp/caddy.deb || apt-get install -f -y -qq
+                    rm -f /tmp/caddy.deb
+                fi
+            fi
+            command -v caddy >/dev/null 2>&1
+        "
     else
         success "Caddy is already installed."
     fi
