@@ -19,7 +19,7 @@
 
 **OpenShip Deploy** is an automated, production-ready toolkit designed for:
 1. **Control Plane Provisioning**: Prepares a clean Ubuntu 24.04 LTS VPS as a dedicated OpenShip Control Plane with security hardening, automated updates, and diagnostics.
-2. **Worker Database Services**: Provides an isolated, pre-tuned **MariaDB 11.4 LTS + Redis 7.4 Alpine** stack accessible exclusively via the internal Docker network (`openship_default`).
+2. **Worker Database Services**: Provides an isolated, pre-tuned **MariaDB 11.4 LTS + Redis 7.4 Alpine** stack accessible exclusively via the internal Docker network (`openship-openship-deploy`, configurable via `OPENSHIP_NETWORK`).
 3. **Application Templates**: Includes a production-ready **Laravel + FrankenPHP** template with auto-provisioning databases, zero-config migrations, and OpenShip domain routing.
 
 ---
@@ -41,7 +41,7 @@
  OpenShip Edge :80/:443         OpenShip Edge :80/:443
        │                               │
  OpenShip Bare :3001            Laravel (FrankenPHP)
-  (Control Plane daemon)               │ (openship_default)
+  (Control Plane daemon)               │ (openship-openship-deploy)
        │                        ┌──────┴──────┐
        │                        │             │
        │                   MariaDB:3306  Redis:6379
@@ -79,6 +79,19 @@ git clone https://github.com/HomaEEE/OpenShip-deploy.git
 cd OpenShip-deploy
 chmod +x *.sh
 sudo ./install.sh
+```
+
+### Option C — Pre-hardening + Upstream Wizard (`install-interactive.sh`)
+
+Automatically configures server security & environment (swap, sysctl, journald, UFW, Fail2ban, Docker), downloads the official OpenShip CLI from `openship.io`, and hands over full interactive control directly to OpenShip's setup wizard:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
+```
+
+Or via clone:
+```bash
+sudo ./install-interactive.sh
 ```
 
 ### What `install.sh` does
@@ -123,8 +136,8 @@ For production/worker nodes, this repository provides a dedicated **MariaDB 11.4
 ### 1. Direct OpenShip Deployment (Recommended)
 This repository contains a root `docker-compose.yml` and `openship.json`. You can add this repository as a project in your OpenShip dashboard and deploy it directly with zero configuration:
 
-- **Network**: Registers in `openship_default` under aliases `mariadb` and `redis`.
-- **Security**: Ports `3306` and `6379` are **not exposed to the host or internet**. Accessible only to containers on `openship_default`.
+- **Network**: Registers in `openship-openship-deploy` (or `OPENSHIP_NETWORK`) under aliases `mariadb` and `redis`.
+- **Security**: Ports `3306` and `6379` are **not exposed to the host or internet**. Accessible only to containers on `openship-openship-deploy`.
 
 ### 2. Manual CLI Deployment
 ```bash
@@ -167,7 +180,7 @@ Use the ready-to-go universal template in [`templates/laravel-frankenphp/`](temp
    - `DB_ROOT_PASSWORD=openship_root_secret` (only needed during first deploy; wiped from memory after creation)
    - `APP_KEY=base64:...`
 3. On first startup, `entrypoint.sh`:
-   - Auto-discovers MariaDB and Redis in `openship_default`.
+   - Auto-discovers MariaDB and Redis in `openship-openship-deploy`.
    - Creates the database and user automatically via PHP PDO.
    - Runs migrations (`php artisan migrate --force`).
    - Caches configs, routes, views, icons.

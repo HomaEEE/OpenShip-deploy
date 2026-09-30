@@ -74,6 +74,19 @@ chmod +x *.sh
 sudo ./install.sh
 ```
 
+### Варіант C — Попереднє налаштування + візард OpenShip (`install-interactive.sh`)
+
+Автоматично виконує системну підготовку та hardening (swap, sysctl, journald, UFW, Fail2ban, Docker) без зайвих запитань, завантажує CLI з `openship.io` та передає 100% інтерактивний контроль офіційному візарду OpenShip:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/install-interactive.sh | sudo bash
+```
+
+Або через клонування:
+```bash
+sudo ./install-interactive.sh
+```
+
 Інсталятор **повністю інтерактивний** — параметри командного рядка не потрібні.
 
 ---
@@ -133,7 +146,7 @@ sudo ./deploy-services.sh
 # docker-compose.yml проєкту
 networks:
   default:
-    name: openship_default
+    name: openship-openship-deploy
     external: true
 ```
 
