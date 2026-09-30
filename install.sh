@@ -814,38 +814,52 @@ collect_configuration() {
         echo
 
         if ask_yes_no "Resume using previously entered values?" "Y"; then
-            # Sanitize state file in case values with spaces were saved unquoted
-            local tmp_state="${STATE_FILE}.tmp"
+            # Safely parse state file without sourcing to prevent syntax errors with spaces
             while IFS="=" read -r key val || [[ -n "$key" ]]; do
-                [[ -z "$key" || "$key" =~ ^# ]] && echo "$key" && continue
+                [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+                key="$(echo "$key" | tr -d '[:space:]')"
                 val="${val#\"}"
                 val="${val%\"}"
-                echo "${key}=\"${val}\""
-            done < "$STATE_FILE" > "$tmp_state" 2>/dev/null && mv -f "$tmp_state" "$STATE_FILE" 2>/dev/null || rm -f "$tmp_state"
+                val="${val#\'}"
+                val="${val%\'}"
+                case "$key" in
+                    INSTALL_MODE)             INSTALL_MODE="$val" ;;
+                    HOSTNAME)                 HOSTNAME_INPUT="$val" ;;
+                    TIMEZONE)                 TIMEZONE_INPUT="$val" ;;
+                    SSH_PORT)                 SSH_PORT_INPUT="$val" ;;
+                    ADMIN_USER)               ADMIN_USER_INPUT="$val" ;;
+                    ENABLE_UFW)               ENABLE_UFW="$val" ;;
+                    ENABLE_FAIL2BAN)          ENABLE_FAIL2BAN="$val" ;;
+                    ENABLE_SWAP)              ENABLE_SWAP="$val" ;;
+                    SWAP_SIZE_GB)             SWAP_SIZE_GB="$val" ;;
+                    OPENSHIP_ADMIN_NAME)      OPENSHIP_ADMIN_NAME_INPUT="$val" ;;
+                    OPENSHIP_ADMIN_EMAIL)     OPENSHIP_ADMIN_EMAIL_INPUT="$val" ;;
+                    OPENSHIP_DOMAIN_KIND)     OPENSHIP_DOMAIN_KIND="$val" ;;
+                    OPENSHIP_HOST)            OPENSHIP_HOST="$val" ;;
+                    OPENSHIP_PUBLIC_URL)      OPENSHIP_PUBLIC_URL="$val" ;;
+                    OPENSHIP_EDGE_ENABLED)    OPENSHIP_EDGE_ENABLED="$val" ;;
+                    OPENSHIP_PROXY_MODE)      OPENSHIP_PROXY_MODE="$val" ;;
+                    OPENSHIP_NO_HOST_CONTROL) OPENSHIP_NO_HOST_CONTROL="$val" ;;
+                    CADDY_SSL_MODE)           CADDY_SSL_MODE="$val" ;;
+                    CADDY_ORIGIN_CERT_PATH)   CADDY_ORIGIN_CERT_PATH="$val" ;;
+                    CADDY_ORIGIN_KEY_PATH)    CADDY_ORIGIN_KEY_PATH="$val" ;;
+                esac
+            done < "$STATE_FILE"
 
-            # shellcheck disable=SC1090
-            source "$STATE_FILE"
-
-            # Map state file keys back to input variables
-            HOSTNAME_INPUT="${HOSTNAME:-openship-control}"
-            TIMEZONE_INPUT="${TIMEZONE:-UTC}"
-            SSH_PORT_INPUT="${SSH_PORT:-22}"
-            ADMIN_USER_INPUT="${ADMIN_USER:-openship}"
+            # Apply sensible defaults if not set in state file
+            HOSTNAME_INPUT="${HOSTNAME_INPUT:-openship-control}"
+            TIMEZONE_INPUT="${TIMEZONE_INPUT:-UTC}"
+            SSH_PORT_INPUT="${SSH_PORT_INPUT:-22}"
+            ADMIN_USER_INPUT="${ADMIN_USER_INPUT:-openship}"
             ENABLE_UFW="${ENABLE_UFW:-true}"
             ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-true}"
             ENABLE_SWAP="${ENABLE_SWAP:-true}"
             SWAP_SIZE_GB="${SWAP_SIZE_GB:-2}"
-            OPENSHIP_ADMIN_NAME_INPUT="${OPENSHIP_ADMIN_NAME:-}"
-            OPENSHIP_ADMIN_EMAIL_INPUT="${OPENSHIP_ADMIN_EMAIL:-}"
             OPENSHIP_DOMAIN_KIND="${OPENSHIP_DOMAIN_KIND:-none}"
-            OPENSHIP_HOST="${OPENSHIP_HOST:-}"
-            OPENSHIP_PUBLIC_URL="${OPENSHIP_PUBLIC_URL:-}"
             OPENSHIP_EDGE_ENABLED="${OPENSHIP_EDGE_ENABLED:-false}"
             OPENSHIP_PROXY_MODE="${OPENSHIP_PROXY_MODE:-none}"
             OPENSHIP_NO_HOST_CONTROL="${OPENSHIP_NO_HOST_CONTROL:-false}"
             CADDY_SSL_MODE="${CADDY_SSL_MODE:-auto}"
-            CADDY_ORIGIN_CERT_PATH="${CADDY_ORIGIN_CERT_PATH:-}"
-            CADDY_ORIGIN_KEY_PATH="${CADDY_ORIGIN_KEY_PATH:-}"
 
             # Auto-infer proxy mode if loading an older state file
             if [[ "$OPENSHIP_PROXY_MODE" == "none" ]]; then

@@ -56,16 +56,25 @@ echo
 
 if [[ -f "$STATE_FILE" ]]; then
     ok "Installer state exists: $STATE_FILE"
-    # Sanitize state file in case values with spaces were saved unquoted
-    tmp_state="${STATE_FILE}.tmp"
     while IFS="=" read -r key val || [[ -n "$key" ]]; do
-        [[ -z "$key" || "$key" =~ ^# ]] && echo "$key" && continue
+        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+        key="$(echo "$key" | tr -d '[:space:]')"
         val="${val#\"}"
         val="${val%\"}"
-        echo "${key}=\"${val}\""
-    done < "$STATE_FILE" > "$tmp_state" 2>/dev/null && mv -f "$tmp_state" "$STATE_FILE" 2>/dev/null || rm -f "$tmp_state"
-    # shellcheck disable=SC1090
-    source "$STATE_FILE"
+        val="${val#\'}"
+        val="${val%\'}"
+        case "$key" in
+            INSTALL_MODE)             INSTALL_MODE="$val" ;;
+            OPENSHIP_ROLE)            OPENSHIP_ROLE="$val" ;;
+            SSH_PORT)                 SSH_PORT="$val" ;;
+            ADMIN_USER)               ADMIN_USER="$val" ;;
+            OPENSHIP_HOST)            OPENSHIP_HOST="$val" ;;
+            OPENSHIP_DOMAIN_KIND)     OPENSHIP_DOMAIN_KIND="$val" ;;
+            OPENSHIP_EDGE_ENABLED)    OPENSHIP_EDGE_ENABLED="$val" ;;
+            OPENSHIP_PROXY_MODE)      OPENSHIP_PROXY_MODE="$val" ;;
+            OPENSHIP_NO_HOST_CONTROL) OPENSHIP_NO_HOST_CONTROL="$val" ;;
+        esac
+    done < "$STATE_FILE"
     echo "  Mode:         ${INSTALL_MODE:-unknown}"
     echo "  Role:         ${OPENSHIP_ROLE:-control}"
     echo "  SSH port:     ${SSH_PORT:-22}"
