@@ -2,14 +2,15 @@
   "$schema": "https://openship.io/openship.schema.json",
   "framework": "docker-compose",
   "composePath": "services/mariadb-redis/docker-compose.yml",
-  "env": [
-    {
-      "name": "MARIADB_ROOT_PASSWORD",
-      "secret": "mariadb_root_password"
+  "volumes": ["mariadb_data", "redis_data"],
+  "env": {
+    "MARIADB_ROOT_PASSWORD": {
+      "value": "mariadb_root_password",
+      "secret": true
     },
-    {
-      "name": "REDIS_PASSWORD",
-      "secret": "redis_password"
+    "REDIS_PASSWORD": {
+      "value": "redis_password",
+      "secret": true
     }
-  ]
+  }
 }
