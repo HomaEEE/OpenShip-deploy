@@ -3,6 +3,8 @@ services:
     image: mariadb:${MARIADB_VERSION:-11.4}
     container_name: mariadb
     restart: unless-stopped
+    ports:
+      - "${MARIADB_BIND_IP:-127.0.0.1}:${MARIADB_PORT:-3306}:3306"
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -21,10 +23,6 @@ services:
           memory: ${MARIADB_MEMORY_LIMIT:-1024M}
     volumes:
       - mariadb_data:/var/lib/mysql
-    networks:
-      openship_network:
-        aliases:
-          - mariadb
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -36,6 +34,8 @@ services:
     image: redis:${REDIS_VERSION:-7.4-alpine}
     container_name: redis
     restart: unless-stopped
+    ports:
+      - "${REDIS_BIND_IP:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     command: >
       sh -c 'exec redis-server
       --bind 0.0.0.0
@@ -52,10 +52,6 @@ services:
           memory: ${REDIS_MEMORY_LIMIT:-512M}
     volumes:
       - redis_data:/data
-    networks:
-      openship_network:
-        aliases:
-          - redis
     healthcheck:
       test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
       interval: 10s
@@ -70,7 +66,7 @@ services:
     ports:
       - "${PHPMYADMIN_BIND_IP:-127.0.0.1}:${PHPMYADMIN_PORT:-20003}:80"
     environment:
-      PMA_HOST: ${PHPMYADMIN_HOST:-mariadb}
+      PMA_HOST: ${PHPMYADMIN_HOST:-127.0.0.1}
       PMA_PORT: ${PHPMYADMIN_PORT_DB:-3306}
       UPLOAD_LIMIT: ${PHPMYADMIN_UPLOAD_LIMIT:-512M}
       MEMORY_LIMIT: ${PHPMYADMIN_PHP_MEMORY_LIMIT:-128M}
@@ -78,10 +74,6 @@ services:
       resources:
         limits:
           memory: ${PHPMYADMIN_MEMORY_LIMIT:-256M}
-    networks:
-      openship_network:
-        aliases:
-          - phpmyadmin
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:80/ || exit 1"]
       interval: 15s
@@ -99,6 +91,6 @@ volumes:
     name: redis_data
 
 networks:
-  openship_network:
-    name: ${OPENSHIP_NETWORK:-openship-openship-deploy}
+  default:
+    name: ${OPENSHIP_NETWORK:-bridge}
     external: true

@@ -194,7 +194,7 @@ if command -v docker >/dev/null 2>&1; then
             fi
         done
 
-        local net="${OPENSHIP_NETWORK:-openship-openship-deploy}"
+        local net="${OPENSHIP_NETWORK:-bridge}"
         if docker network inspect "$net" >/dev/null 2>&1; then
             ok "Docker network '${net}' is active"
         fi

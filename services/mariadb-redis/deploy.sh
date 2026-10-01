@@ -59,15 +59,13 @@ generate_random_password() {
     fi
 }
 
-ensure_docker_network() {
-    local net_name="${OPENSHIP_NETWORK:-openship-openship-deploy}"
+check_docker_network() {
+    local net_name="${OPENSHIP_NETWORK:-bridge}"
     if ! docker network inspect "$net_name" &>/dev/null; then
-        log "Creating shared external Docker network '${net_name}'..."
-        docker network create             --driver bridge             --opt "com.docker.network.bridge.enable_icc=true"             "$net_name"
-        success "Network '${net_name}' created."
-    else
-        log "Network '${net_name}' already exists."
+        error "Docker network '${net_name}' does not exist! It must be pre-created by OpenShip."
+        exit 1
     fi
+    log "Using existing Docker network '${net_name}'."
 }
 
 tune_mariadb_buffer_pool() {
@@ -155,7 +153,7 @@ PHPMYADMIN_BIND_IP=127.0.0.1
 PHPMYADMIN_UPLOAD_LIMIT=512M
 PHPMYADMIN_MEMORY_LIMIT=${pma_limit}
 
-OPENSHIP_NETWORK=openship-openship-deploy
+OPENSHIP_NETWORK=bridge
 EOF
 
     chmod 600 "$ENV_FILE"
@@ -165,7 +163,7 @@ EOF
 start_services() {
     section "Deploying MariaDB, Redis and phpMyAdmin containers"
 
-    ensure_docker_network
+    check_docker_network
 
     log "Starting stack..."
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
@@ -193,7 +191,7 @@ start_services() {
     echo
 
     if [[ "$healthy" == "true" ]]; then
-        local net="${OPENSHIP_NETWORK:-openship-openship-deploy}"
+        local net="${OPENSHIP_NETWORK:-bridge}"
         success "MariaDB, Redis and phpMyAdmin are healthy and running on ${net}!"
     else
         warn "Containers started. Checking final statuses:"
@@ -228,7 +226,7 @@ show_status() {
     echo -e "${BOLD}Containers:${NC}"
     docker ps -a --filter "name=mariadb" --filter "name=redis" --filter "name=phpmyadmin" --format "table {{.Names}}	{{.Status}}	{{.Ports}}	{{.Networks}}"
 
-    local net="${OPENSHIP_NETWORK:-openship-openship-deploy}"
+    local net="${OPENSHIP_NETWORK:-bridge}"
     echo
     echo -e "${BOLD}Network (${net}):${NC}"
     docker network inspect "$net" --format '{{range .Containers}}{{.Name}} ({{.IPv4Address}}){{"

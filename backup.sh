@@ -4,7 +4,7 @@
 # ==============================================================================
 set -euo pipefail
 
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/openship-services}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/openship}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 MARIA_CONTAINER="${MARIADB_CONTAINER:-}"
