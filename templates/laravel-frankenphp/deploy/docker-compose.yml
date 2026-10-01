@@ -56,5 +56,5 @@ volumes:
 networks:
   default: {}
   infra:
-    name: ${OPENSHIP_NETWORK:-infra-network}
+    name: ${OPENSHIP_NETWORK:-openship-openship-deploy}
     external: true
