@@ -21,7 +21,7 @@ if probe_db "$INITIAL_DB_HOST" "$TARGET_DB_PORT"; then
     RESOLVED_DB_HOST="$INITIAL_DB_HOST"
 else
     echo "==> Notice: '$INITIAL_DB_HOST:$TARGET_DB_PORT' unreachable. Probing fallback hosts..."
-    for candidate in mariadb openship-openship-deploy-mariadb openship-deploy-mariadb mariadb-redis-mariadb; do
+    for candidate in mariadb openship-mariadb openship-deploy-mariadb mariadb-redis-mariadb; do
         if probe_db "$candidate" "$TARGET_DB_PORT"; then
             RESOLVED_DB_HOST="$candidate"
             echo "==> Discovered MariaDB at '$RESOLVED_DB_HOST'"
@@ -50,7 +50,7 @@ if probe_redis "$INITIAL_REDIS_HOST" "$TARGET_REDIS_PORT"; then
     RESOLVED_REDIS_HOST="$INITIAL_REDIS_HOST"
 else
     echo "==> Notice: '$INITIAL_REDIS_HOST:$TARGET_REDIS_PORT' unreachable. Probing fallback hosts..."
-    for candidate in redis openship-openship-deploy-redis openship-deploy-redis mariadb-redis-redis; do
+    for candidate in redis openship-redis openship-deploy-redis mariadb-redis-redis; do
         if probe_redis "$candidate" "$TARGET_REDIS_PORT"; then
             RESOLVED_REDIS_HOST="$candidate"
             echo "==> Discovered Redis at '$RESOLVED_REDIS_HOST'"

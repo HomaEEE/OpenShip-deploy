@@ -54,5 +54,5 @@ volumes:
 
 networks:
   openship_network:
-    name: ${OPENSHIP_NETWORK:-openship-openship-deploy}
+    name: ${OPENSHIP_NETWORK:-openship}
     external: true

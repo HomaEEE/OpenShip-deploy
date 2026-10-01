@@ -9,7 +9,7 @@
 1. **Автоматическое создание БД и пользователя**:
    При первом запуске контейнера `entrypoint.sh` через PHP PDO подключается к MariaDB с `DB_ROOT_PASSWORD` (по умолчанию `openship_root_secret`), создает базу данных `DB_DATABASE`, пользователя `DB_USERNAME`, задает пароль `DB_PASSWORD` и выдает все права. После создания пароль root удаляется из окружения.
 2. **Автопоиск хостов MariaDB & Redis**:
-   Автоматически определяет имя хоста (`mariadb`, `openship-openship-deploy-mariadb`, `redis`, `openship-openship-deploy-redis`), исключая ошибки DNS Docker.
+   Автоматически определяет имя хоста (`mariadb`, `openship-mariadb`, `redis`, `openship-redis`), исключая ошибки DNS Docker.
 3. **FrankenPHP + Caddy**:
    Высокопроизводительный сервер на порту 80 с поддержкой Cloudflare trusted proxies.
 4. **Изоляция очередей и кэша**:

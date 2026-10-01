@@ -1,3 +1,5 @@
+name: openship
+
 services:
   mariadb:
     image: mariadb:${MARIADB_VERSION:-11.4}
@@ -5,30 +7,14 @@ services:
     restart: unless-stopped
     ports:
       - "${MARIADB_BIND_IP:-127.0.0.1}:${MARIADB_PORT:-3306}:3306"
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --bind-address=0.0.0.0
-      - --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL_SIZE:-256M}
-      - --innodb-log-file-size=${MARIADB_LOG_FILE_SIZE:-128M}
-      - --max-connections=${MARIADB_MAX_CONNECTIONS:-150}
-      - --slow-query-log=${MARIADB_SLOW_QUERY_LOG:-1}
-      - --long-query-time=${MARIADB_LONG_QUERY_TIME:-2}
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
-      MARIADB_ROOT_HOST: "%"
-    deploy:
-      resources:
-        limits:
-          memory: ${MARIADB_MEMORY_LIMIT:-1024M}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-}
+      MARIADB_USER: ${MARIADB_USER:-}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-}
     volumes:
       - mariadb_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      - ./config/mariadb/my.cnf:/etc/mysql/conf.d/my.cnf
 
   redis:
     image: redis:${REDIS_VERSION:-7.4-alpine}
@@ -36,28 +22,12 @@ services:
     restart: unless-stopped
     ports:
       - "${REDIS_BIND_IP:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
-    command: >
-      sh -c 'exec redis-server
-      --bind 0.0.0.0
-      --protected-mode no
-      --appendonly yes
-      --maxmemory ${REDIS_MAXMEMORY:-256mb}
-      --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-noeviction}
-      --requirepass "$$REDIS_PASSWORD"'
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass "${REDIS_PASSWORD}"
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-    deploy:
-      resources:
-        limits:
-          memory: ${REDIS_MEMORY_LIMIT:-512M}
     volumes:
       - redis_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
 
   phpmyadmin:
     image: phpmyadmin/phpmyadmin:${PHPMYADMIN_VERSION:-latest}
@@ -68,29 +38,13 @@ services:
     environment:
       PMA_HOST: ${PHPMYADMIN_HOST:-mariadb}
       PMA_PORT: ${PHPMYADMIN_PORT_DB:-3306}
-      UPLOAD_LIMIT: ${PHPMYADMIN_UPLOAD_LIMIT:-512M}
-      MEMORY_LIMIT: ${PHPMYADMIN_PHP_MEMORY_LIMIT:-128M}
-    deploy:
-      resources:
-        limits:
-          memory: ${PHPMYADMIN_MEMORY_LIMIT:-256M}
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:80/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      UPLOAD_LIMIT: 512M
+      MEMORY_LIMIT: 256M
     depends_on:
-      mariadb:
-        condition: service_healthy
+      - mariadb
 
 volumes:
   mariadb_data:
     name: mariadb_data
   redis_data:
     name: redis_data
-
-networks:
-  default:
-    name: ${OPENSHIP_NETWORK:-openship}
-    external: true
