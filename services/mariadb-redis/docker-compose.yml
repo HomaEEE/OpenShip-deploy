@@ -21,8 +21,17 @@ services:
       MARIADB_DATABASE: ${MARIADB_DATABASE:-}
       MARIADB_USER: ${MARIADB_USER:-}
       MARIADB_PASSWORD: ${MARIADB_PASSWORD:-}
+
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
     volumes:
       - mariadb_data:/var/lib/mysql
+    networks:
+      - default
 
   redis:
     image: redis:${REDIS_VERSION:-7.4-alpine}
@@ -65,4 +74,4 @@ volumes:
 
 networks:
   default:
-    name: ${OPENSHIP_NETWORK:-infra-network}
+    driver: bridge
