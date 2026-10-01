@@ -51,6 +51,8 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     volumes:
       - redis_data:/data
+    networks:
+      - default
 
   phpmyadmin:
     image: phpmyadmin/phpmyadmin:${PHPMYADMIN_VERSION:-latest}
@@ -65,6 +67,8 @@ services:
       MEMORY_LIMIT: 64M
     depends_on:
       - mariadb
+    networks:
+      - default
 
 volumes:
   mariadb_data:
