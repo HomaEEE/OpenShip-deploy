@@ -51,15 +51,6 @@ ensure_docker_and_compose() {
     fi
 }
 
-generate_random_password() {
-    local length="${1:-24}"
-    if command -v openssl &>/dev/null; then
-        openssl rand -hex "$(( (length + 1) / 2 ))" 2>/dev/null | cut -c1-"$length"
-    else
-        tr -dc 'a-zA-Z0-9' </dev/urandom 2>/dev/null | head -c "$length" || true
-    fi
-}
-
 ensure_docker_network() {
     local net_name="${OPENSHIP_NETWORK:-openship}"
     if ! docker network inspect "$net_name" &>/dev/null; then
@@ -104,16 +95,26 @@ configure_environment() {
 
     # Read current values if present
     local maria_pass redis_pass maria_ver redis_ver maria_pool pma_ver pma_port pma_limit redis_policy net_name
-    maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '11.4')"
-    redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '7.4-alpine')"
-    maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || true)"
-    redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || true)"
-    maria_pool="$(grep -E '^MARIADB_BUFFER_POOL_SIZE=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo "${MARIADB_BUFFER_POOL_SIZE}")"
-    pma_ver="$(grep -E '^PHPMYADMIN_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'latest')"
-    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '20003')"
-    pma_limit="$(grep -E '^PHPMYADMIN_MEMORY_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '256M')"
-    redis_policy="$(grep -E '^REDIS_MAXMEMORY_POLICY=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'noeviction')"
-    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'openship')"
+    maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo '11.4')"
+    redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo '7.4-alpine')"
+    maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || true)"
+    redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || true)"
+    maria_pool="$(grep -E '^MARIADB_BUFFER_POOL_SIZE=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo "${MARIADB_BUFFER_POOL_SIZE}")"
+    pma_ver="$(grep -E '^PHPMYADMIN_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo 'latest')"
+    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo '20003')"
+    pma_limit="$(grep -E '^PHPMYADMIN_MEMORY_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo '256M')"
+    redis_policy="$(grep -E '^REDIS_MAXMEMORY_POLICY=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo 'noeviction')"
+    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo 'openship')"
 
     [[ -z "$maria_ver" ]] && maria_ver="11.4"
     [[ -z "$redis_ver" ]] && redis_ver="7.4-alpine"
@@ -124,17 +125,34 @@ configure_environment() {
     [[ -z "$redis_policy" ]] && redis_policy="noeviction"
     [[ -z "$net_name" ]] && net_name="openship"
 
-    local is_new=false
     if [[ -z "$maria_pass" ]]; then
-        maria_pass="$(generate_random_password 24)"
-        is_new=true
-        log "Generated strong MariaDB root password."
+        if [[ -t 0 ]]; then
+            while [[ -z "$maria_pass" ]]; do
+                read -r -s -p "Enter MariaDB root password: " maria_pass
+                echo
+                if [[ -z "$maria_pass" ]]; then
+                    warn "MariaDB root password cannot be empty."
+                fi
+            done
+        else
+            error "MARIADB_ROOT_PASSWORD is required. Set it in ${ENV_FILE} or environment."
+            exit 1
+        fi
     fi
 
     if [[ -z "$redis_pass" ]]; then
-        redis_pass="$(generate_random_password 24)"
-        is_new=true
-        log "Generated strong Redis password."
+        if [[ -t 0 ]]; then
+            while [[ -z "$redis_pass" ]]; do
+                read -r -s -p "Enter Redis password: " redis_pass
+                echo
+                if [[ -z "$redis_pass" ]]; then
+                    warn "Redis password cannot be empty."
+                fi
+            done
+        else
+            error "REDIS_PASSWORD is required. Set it in ${ENV_FILE} or environment."
+            exit 1
+        fi
     fi
 
     cat > "$ENV_FILE" <<EOF
@@ -249,8 +267,10 @@ follow_logs() {
 
 print_summary() {
     local pma_port net_name
-    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '20003')"
-    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'openship')"
+    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo '20003')"
+    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
+' || echo 'openship')"
 
     section "Ready! Connection Details"
 

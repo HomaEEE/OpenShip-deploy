@@ -43,9 +43,9 @@ services:
       --appendonly yes
       --maxmemory ${REDIS_MAXMEMORY:-256mb}
       --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-noeviction}
-      $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+      --requirepass "$$REDIS_PASSWORD"'
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     deploy:
       resources:
         limits:
@@ -53,7 +53,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
