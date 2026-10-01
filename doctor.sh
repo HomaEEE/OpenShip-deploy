@@ -15,6 +15,13 @@ ok() { echo -e "$GREEN[ OK ]$NC $*"; }
 warn() { echo -e "$YELLOW[WARN]$NC $*"; }
 fail() { echo -e "$RED[FAIL]$NC $*"; }
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: sudo ./doctor.sh"
+    echo
+    echo "Diagnoses host system, OpenShip Control Plane / Worker status, network, and reverse proxy."
+    exit 0
+fi
+
 if [[ "$EUID" -ne 0 ]]; then
     echo "Run as root: sudo ./doctor.sh" >&2
     exit 1
@@ -194,7 +201,7 @@ if command -v docker >/dev/null 2>&1; then
             fi
         done
 
-        local net="${OPENSHIP_NETWORK:-bridge}"
+        local net="${OPENSHIP_NETWORK:-openship}"
         if docker network inspect "$net" >/dev/null 2>&1; then
             ok "Docker network '${net}' is active"
         fi

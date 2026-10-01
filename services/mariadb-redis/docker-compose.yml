@@ -15,7 +15,7 @@ services:
       - --slow-query-log=${MARIADB_SLOW_QUERY_LOG:-1}
       - --long-query-time=${MARIADB_LONG_QUERY_TIME:-2}
     environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-openship_root_secret}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
       MARIADB_ROOT_HOST: "%"
     deploy:
       resources:
@@ -42,7 +42,7 @@ services:
       --protected-mode no
       --appendonly yes
       --maxmemory ${REDIS_MAXMEMORY:-256mb}
-      --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
+      --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-noeviction}
       $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
@@ -66,7 +66,7 @@ services:
     ports:
       - "${PHPMYADMIN_BIND_IP:-127.0.0.1}:${PHPMYADMIN_PORT:-20003}:80"
     environment:
-      PMA_HOST: ${PHPMYADMIN_HOST:-127.0.0.1}
+      PMA_HOST: ${PHPMYADMIN_HOST:-mariadb}
       PMA_PORT: ${PHPMYADMIN_PORT_DB:-3306}
       UPLOAD_LIMIT: ${PHPMYADMIN_UPLOAD_LIMIT:-512M}
       MEMORY_LIMIT: ${PHPMYADMIN_PHP_MEMORY_LIMIT:-128M}
@@ -92,5 +92,5 @@ volumes:
 
 networks:
   default:
-    name: ${OPENSHIP_NETWORK:-bridge}
+    name: ${OPENSHIP_NETWORK:-openship}
     external: true

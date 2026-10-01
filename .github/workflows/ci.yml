@@ -1,0 +1,49 @@
+name: CI & Code Quality
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validate Bash syntax (bash -n)
+        run: |
+          find . -name "*.sh" -not -path "*/.*" -exec bash -n {} +
+
+      - name: Run ShellCheck on scripts
+        run: |
+          shellcheck -x -e SC1090,SC1091 \
+            backup.sh \
+            restore.sh \
+            doctor.sh \
+            update.sh \
+            deploy-services.sh \
+            services/mariadb-redis/backup.sh \
+            services/mariadb-redis/restore.sh \
+            services/mariadb-redis/deploy.sh
+
+      - name: Validate Docker Compose configurations
+        env:
+          MARIADB_ROOT_PASSWORD: ci_test_password
+          APP_KEY: base64:ci_test_key_dummy_123456789012345678901234=
+          DB_DATABASE: ci_test_db
+          DB_USERNAME: ci_test_user
+          DB_PASSWORD: ci_test_password
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f services/mariadb-redis/docker-compose.yml config --quiet
+          docker compose -f templates/laravel-frankenphp/deploy/docker-compose.yml config --quiet

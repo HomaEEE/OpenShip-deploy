@@ -62,7 +62,7 @@ sudo ./doctor.sh
   Caddy :80/:443                  OpenShip Edge :80/:443
    ├── :3001 (Dashboard UI)            │
    └── :4000 (API & WebSockets)    Laravel (FrankenPHP)
-       │                               │ (openship-openship-deploy)
+       │                               │ (openship)
        │                        ┌──────┴──────┐
        │                        │             │
        │                   MariaDB:3306  Redis:6379
@@ -128,7 +128,7 @@ sudo ./doctor.sh
 For production application nodes:
 
 ### Direct OpenShip Deploy
-Add this repo as an OpenShip project. The root `docker-compose.yml` launches **MariaDB 11.4 LTS + Redis 7.4 Alpine** into `openship-openship-deploy`. Ports are not exposed to the internet.
+Add this repo as an OpenShip project. The root `docker-compose.yml` launches **MariaDB 11.4 LTS + Redis 7.4 Alpine** into `openship`. Ports are not exposed to the internet.
 
 ### CLI Deploy & Management
 ```bash
@@ -141,7 +141,8 @@ sudo ./deploy-services.sh --stop      # Stop stack (data preserved)
 
 ### Automated Backups
 ```bash
-sudo ./backup.sh                      # Instant compressed MariaDB backup
+sudo ./backup.sh
+sudo ./restore.sh                      # Instant compressed MariaDB backup
 # Cron daily backup at 03:00 UTC (7-day retention in /var/backups/mariadb/):
 (crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/mariadb-backup.sh >> /var/log/mariadb-backup.log 2>&1") | crontab -
 ```

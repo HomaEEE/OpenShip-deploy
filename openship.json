@@ -1,5 +1,5 @@
 {
   "$schema": "https://openship.io/openship.schema.json",
   "framework": "docker-compose",
-  "composePath": "docker-compose.yml"
+  "composePath": "services/mariadb-redis/docker-compose.yml"
 }

@@ -62,7 +62,7 @@ sudo ./doctor.sh
   Caddy :80/:443                  OpenShip Edge :80/:443
    ├── :3001 (UI Дашборда)             │
    └── :4000 (API та WebSockets)   Laravel (FrankenPHP)
-       │                               │ (openship-openship-deploy)
+       │                               │ (openship)
        │                        ┌──────┴──────┐
        │                        │             │
        │                   MariaDB:3306  Redis:6379
@@ -126,7 +126,7 @@ sudo ./doctor.sh
 Для серверів із робочими додатками:
 
 ### Деплой через інтерфейс OpenShip
-Додайте цей репозиторій у дашборд OpenShip. Файл `docker-compose.yml` у корені запустить **MariaDB 11.4 LTS + Redis 7.4 Alpine** у мережу `openship-openship-deploy`. Порти назовні не публікуються.
+Додайте цей репозиторій у дашборд OpenShip. Файл `docker-compose.yml` у корені запустить **MariaDB 11.4 LTS + Redis 7.4 Alpine** у мережу `openship`. Порти назовні не публікуються.
 
 ### Керування через CLI
 ```bash
@@ -139,7 +139,8 @@ sudo ./deploy-services.sh --stop      # Зупинка (дані зберіга�
 
 ### Автоматичний бекап
 ```bash
-sudo ./backup.sh                      # Миттєвий бекап MariaDB у gzip
+sudo ./backup.sh
+sudo ./restore.sh                      # Миттєвий бекап MariaDB у gzip
 # Щоденний бекап о 03:00 UTC (зберігання 7 днів у /var/backups/mariadb/):
 (crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/mariadb-backup.sh >> /var/log/mariadb-backup.log 2>&1") | crontab -
 ```

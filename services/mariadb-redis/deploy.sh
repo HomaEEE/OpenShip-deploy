@@ -5,7 +5,8 @@
 # ==============================================================================
 #
 # Idempotent deployer for production MariaDB 11.4 LTS, Redis 7.4, and phpMyAdmin
-# configured for low memory footprint on 2GB VPS nodes.
+# configured with low memory footprint on 2GB VPS nodes and connected via
+# the shared 'openship' Docker network with internal DNS resolution.
 #
 # ==============================================================================
 
@@ -53,19 +54,21 @@ ensure_docker_and_compose() {
 generate_random_password() {
     local length="${1:-24}"
     if command -v openssl &>/dev/null; then
-        openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c "$length"
+        openssl rand -hex "$(( (length + 1) / 2 ))" 2>/dev/null | cut -c1-"$length"
     else
-        head /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c "$length"
+        tr -dc 'a-zA-Z0-9' </dev/urandom 2>/dev/null | head -c "$length" || true
     fi
 }
 
-check_docker_network() {
-    local net_name="${OPENSHIP_NETWORK:-bridge}"
+ensure_docker_network() {
+    local net_name="${OPENSHIP_NETWORK:-openship}"
     if ! docker network inspect "$net_name" &>/dev/null; then
-        error "Docker network '${net_name}' does not exist! It must be pre-created by OpenShip."
-        exit 1
+        log "Creating shared user-defined Docker network '${net_name}'..."
+        docker network create             --driver bridge             --opt "com.docker.network.bridge.enable_icc=true"             "$net_name"
+        success "Network '${net_name}' created (internal Docker DNS active)."
+    else
+        log "Using existing Docker network '${net_name}'."
     fi
-    log "Using existing Docker network '${net_name}'."
 }
 
 tune_mariadb_buffer_pool() {
@@ -99,23 +102,18 @@ configure_environment() {
         fi
     fi
 
-    local maria_pass redis_pass maria_ver redis_ver maria_pool pma_ver pma_port pma_limit
-    maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '11.4')"
-    redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '7.4-alpine')"
-    maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || true)"
-    redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || true)"
-    maria_pool="$(grep -E '^MARIADB_BUFFER_POOL_SIZE=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo "${MARIADB_BUFFER_POOL_SIZE}")"
-    pma_ver="$(grep -E '^PHPMYADMIN_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo 'latest')"
-    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '20003')"
-    pma_limit="$(grep -E '^PHPMYADMIN_MEMORY_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '256M')"
+    # Read current values if present
+    local maria_pass redis_pass maria_ver redis_ver maria_pool pma_ver pma_port pma_limit redis_policy net_name
+    maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '11.4')"
+    redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '7.4-alpine')"
+    maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || true)"
+    redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || true)"
+    maria_pool="$(grep -E '^MARIADB_BUFFER_POOL_SIZE=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo "${MARIADB_BUFFER_POOL_SIZE}")"
+    pma_ver="$(grep -E '^PHPMYADMIN_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'latest')"
+    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '20003')"
+    pma_limit="$(grep -E '^PHPMYADMIN_MEMORY_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '256M')"
+    redis_policy="$(grep -E '^REDIS_MAXMEMORY_POLICY=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'noeviction')"
+    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'openship')"
 
     [[ -z "$maria_ver" ]] && maria_ver="11.4"
     [[ -z "$redis_ver" ]] && redis_ver="7.4-alpine"
@@ -123,14 +121,19 @@ configure_environment() {
     [[ -z "$pma_ver" ]] && pma_ver="latest"
     [[ -z "$pma_port" ]] && pma_port="20003"
     [[ -z "$pma_limit" ]] && pma_limit="256M"
+    [[ -z "$redis_policy" ]] && redis_policy="noeviction"
+    [[ -z "$net_name" ]] && net_name="openship"
 
+    local is_new=false
     if [[ -z "$maria_pass" ]]; then
         maria_pass="$(generate_random_password 24)"
+        is_new=true
         log "Generated strong MariaDB root password."
     fi
 
     if [[ -z "$redis_pass" ]]; then
         redis_pass="$(generate_random_password 24)"
+        is_new=true
         log "Generated strong Redis password."
     fi
 
@@ -145,15 +148,18 @@ MARIADB_MEMORY_LIMIT=1024M
 
 REDIS_VERSION=${redis_ver}
 REDIS_PASSWORD=${redis_pass}
+REDIS_MAXMEMORY=256mb
+REDIS_MAXMEMORY_POLICY=${redis_policy}
 REDIS_MEMORY_LIMIT=512M
 
 PHPMYADMIN_VERSION=${pma_ver}
+PHPMYADMIN_HOST=mariadb
 PHPMYADMIN_PORT=${pma_port}
 PHPMYADMIN_BIND_IP=127.0.0.1
 PHPMYADMIN_UPLOAD_LIMIT=512M
 PHPMYADMIN_MEMORY_LIMIT=${pma_limit}
 
-OPENSHIP_NETWORK=bridge
+OPENSHIP_NETWORK=${net_name}
 EOF
 
     chmod 600 "$ENV_FILE"
@@ -163,7 +169,7 @@ EOF
 start_services() {
     section "Deploying MariaDB, Redis and phpMyAdmin containers"
 
-    check_docker_network
+    ensure_docker_network
 
     log "Starting stack..."
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
@@ -190,9 +196,9 @@ start_services() {
     done
     echo
 
+    local net="${OPENSHIP_NETWORK:-openship}"
     if [[ "$healthy" == "true" ]]; then
-        local net="${OPENSHIP_NETWORK:-bridge}"
-        success "MariaDB, Redis and phpMyAdmin are healthy and running on ${net}!"
+        success "MariaDB, Redis and phpMyAdmin are healthy and running on '${net}'!"
     else
         warn "Containers started. Checking final statuses:"
         warn "MariaDB:    $(docker inspect --format='{{json .State.Health.Status}}' mariadb 2>/dev/null || echo 'not found')"
@@ -226,7 +232,7 @@ show_status() {
     echo -e "${BOLD}Containers:${NC}"
     docker ps -a --filter "name=mariadb" --filter "name=redis" --filter "name=phpmyadmin" --format "table {{.Names}}	{{.Status}}	{{.Ports}}	{{.Networks}}"
 
-    local net="${OPENSHIP_NETWORK:-bridge}"
+    local net="${OPENSHIP_NETWORK:-openship}"
     echo
     echo -e "${BOLD}Network (${net}):${NC}"
     docker network inspect "$net" --format '{{range .Containers}}{{.Name}} ({{.IPv4Address}}){{"
@@ -242,23 +248,18 @@ follow_logs() {
 }
 
 print_summary() {
-    local maria_pass redis_pass pma_port
-    maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'' 
-' || true)"
-    redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'' 
-' || true)"
-    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"'' 
-' || echo '20003')"
+    local pma_port net_name
+    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo '20003')"
+    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' ' || echo 'openship')"
 
     section "Ready! Connection Details"
 
-    echo -e "${BOLD}1. Services Access:${NC}"
+    echo -e "${BOLD}1. Services Access (Internal Network '${net_name}'):${NC}"
     echo "------------------------------------------------------------"
-    echo "MariaDB Host:          mariadb:3306 (internal network)"
-    echo "MariaDB Root Password: ${maria_pass}"
-    echo "Redis Host:            redis:6379 (internal network)"
-    echo "Redis Password:        ${redis_pass}"
+    echo "MariaDB Host:          mariadb:3306"
+    echo "Redis Host:            redis:6379"
     echo "phpMyAdmin Local Port: 127.0.0.1:${pma_port} (proxied to pma.blackcore.dev)"
+    echo "Credentials saved in:  ${ENV_FILE}"
     echo "------------------------------------------------------------"
     echo
     echo -e "${BOLD}2. Project Database Provisioning:${NC}"

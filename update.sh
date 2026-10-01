@@ -15,6 +15,15 @@ ok() { echo -e "$GREEN[ OK ]$NC $*"; }
 warn() { echo -e "$YELLOW[WARN]$NC $*"; }
 die() { echo -e "$RED[ERROR]$NC $*" >&2; exit 1; }
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: sudo ./update.sh [--check]"
+    echo
+    echo "Options:"
+    echo "  --check    Check for OpenShip updates without applying"
+    echo "  --help, -h Display this help message"
+    exit 0
+fi
+
 if [[ "$EUID" -ne 0 ]]; then
     die "Run as root: sudo ./update.sh"
 fi
