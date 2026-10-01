@@ -62,3 +62,7 @@ volumes:
     name: mariadb_data
   redis_data:
     name: redis_data
+
+networks:
+  default:
+    name: ${OPENSHIP_NETWORK:-infra-network}

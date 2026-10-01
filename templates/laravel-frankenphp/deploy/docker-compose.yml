@@ -18,7 +18,7 @@ services:
       DB_DATABASE: "${DB_DATABASE:?DB_DATABASE is required}"
       DB_USERNAME: "${DB_USERNAME:?DB_USERNAME is required}"
       DB_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD is required}"
-      DB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-openship_root_secret}"
+      DB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-}"
 
       # Redis
       REDIS_CLIENT: phpredis
@@ -40,7 +40,8 @@ services:
     volumes:
       - app_storage:/app/storage
     networks:
-      - openship_network
+      - default
+      - infra
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:80/ || exit 1"]
       interval: 10s
@@ -53,6 +54,7 @@ volumes:
     name: ${APP_SLUG:-app}_storage
 
 networks:
-  openship_network:
-    name: ${OPENSHIP_NETWORK:-openship}
+  default: {}
+  infra:
+    name: ${OPENSHIP_NETWORK:-infra-network}
     external: true

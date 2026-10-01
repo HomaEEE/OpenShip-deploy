@@ -113,10 +113,11 @@ prepare_runtime_for_openship() {
 ensure_openship_docker_network() {
     local net_name="openship"
     if command_exists docker && docker info >/dev/null 2>&1; then
-        if ! docker network inspect "" >/dev/null 2>&1; then
-            run_task "Creating shared Docker network ''"                 docker network create --driver bridge --opt "com.docker.network.bridge.enable_icc=true" ""
+        if ! docker network inspect "$net_name" >/dev/null 2>&1; then
+            run_task "Creating shared Docker network '${net_name}'" \
+                docker network create --driver bridge --opt "com.docker.network.bridge.enable_icc=true" "$net_name"
         else
-            ok "Docker network '' already exists"
+            ok "Docker network '${net_name}' already exists"
         fi
     fi
 }
