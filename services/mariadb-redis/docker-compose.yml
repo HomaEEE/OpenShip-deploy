@@ -27,11 +27,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
     volumes:
       - mariadb_data:/var/lib/mysql
     networks:
-      - default
+      - db
 
   redis:
     image: redis:${REDIS_VERSION:-7.4-alpine}
@@ -52,7 +51,7 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      - default
+      - db
 
   phpmyadmin:
     image: phpmyadmin/phpmyadmin:${PHPMYADMIN_VERSION:-latest}
@@ -68,7 +67,7 @@ services:
     depends_on:
       - mariadb
     networks:
-      - default
+      - db
 
 volumes:
   mariadb_data:
@@ -77,5 +76,6 @@ volumes:
     name: redis_data
 
 networks:
-  default:
-    driver: bridge
+  db:
+    name: ${DB_NETWORK:-db-network}
+    external: true

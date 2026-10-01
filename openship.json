@@ -1,5 +1,15 @@
 {
   "$schema": "https://openship.io/openship.schema.json",
   "framework": "docker-compose",
-  "composePath": "services/mariadb-redis/docker-compose.yml"
+  "composePath": "services/mariadb-redis/docker-compose.yml",
+  "env": [
+    {
+      "name": "MARIADB_ROOT_PASSWORD",
+      "secret": "mariadb_root_password"
+    },
+    {
+      "name": "REDIS_PASSWORD",
+      "secret": "redis_password"
+    }
+  ]
 }
