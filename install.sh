@@ -1639,6 +1639,7 @@ ${tls_directive}
         reverse_proxy 127.0.0.1:4000 {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
 ${proto_header}
         }
     }
@@ -1648,6 +1649,7 @@ ${proto_header}
         reverse_proxy 127.0.0.1:4000 {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
 ${proto_header}
         }
     }
@@ -1657,6 +1659,7 @@ ${proto_header}
         reverse_proxy 127.0.0.1:3001 {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
 ${proto_header}
         }
     }
@@ -1775,9 +1778,14 @@ collect_bare_openship_credentials() {
                 OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
                 ;;
             none)
-                OPENSHIP_DOMAIN_KIND="none"
+                if [[ -n "$OPENSHIP_HOST" ]]; then
+                    OPENSHIP_DOMAIN_KIND="byo"
+                    OPENSHIP_PUBLIC_URL="https://$OPENSHIP_HOST"
+                else
+                    OPENSHIP_DOMAIN_KIND="none"
+                    OPENSHIP_PUBLIC_URL=""
+                fi
                 OPENSHIP_EDGE_ENABLED="false"
-                OPENSHIP_PUBLIC_URL=""
                 ;;
         esac
         success "Proxy mode configured: ${OPENSHIP_PROXY_MODE} (domain: ${OPENSHIP_HOST:-none})"
@@ -2084,6 +2092,18 @@ run_bare_openship_setup() {
     echo
 
     openship "${args[@]}"
+
+    # Ensure systemd service persistently sets public URL and trusted origins for terminal WebSockets
+    if [[ -n "$OPENSHIP_PUBLIC_URL" ]]; then
+        mkdir -p /etc/systemd/system/openship.service.d
+        cat > /etc/systemd/system/openship.service.d/override.conf <<EOF
+[Service]
+Environment="OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL}"
+Environment="OPENSHIP_EXTRA_TRUSTED_ORIGINS=${OPENSHIP_PUBLIC_URL},http://${OPENSHIP_HOST},https://${OPENSHIP_HOST}"
+EOF
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl restart openship 2>/dev/null || true
+    fi
 
     unset OPENSHIP_ADMIN_PASSWORD
     unset OPENSHIP_ADMIN_PASSWORD_INPUT
