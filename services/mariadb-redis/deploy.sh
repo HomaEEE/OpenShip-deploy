@@ -278,15 +278,14 @@ print_summary() {
     echo "------------------------------------------------------------"
     echo "MariaDB Host:          mariadb:3306"
     echo "Redis Host:            redis:6379"
-    echo "phpMyAdmin Local Port: 127.0.0.1:${pma_port} (proxied to pma.blackcore.dev)"
+    echo "phpMyAdmin Local Port: 127.0.0.1:${pma_port} (proxied to your PMA domain)"
     echo "Credentials saved in:  ${ENV_FILE}"
     echo "------------------------------------------------------------"
     echo
     echo -e "${BOLD}2. Project Database Provisioning:${NC}"
     echo "------------------------------------------------------------"
     echo "Projects auto-provision their DB & user during deployment"
-    echo "using DB_ROOT_PASSWORD or manage tables via phpMyAdmin:"
-    echo "https://pma.blackcore.dev"
+    echo "using DB_ROOT_PASSWORD or manage tables via phpMyAdmin."
     echo "------------------------------------------------------------"
 }
 

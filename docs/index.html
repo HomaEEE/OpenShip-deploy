@@ -668,6 +668,30 @@
       color: var(--text-main);
     }
 
+    /* Footer */
+    footer {
+      margin-top: 3.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-subtle);
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+
+    footer a:hover {
+      color: var(--accent-cyan);
+    }
+
     /* Tooltip banner */
     .toast {
       position: fixed;
@@ -819,7 +843,7 @@
               <span>Domain / Hostname</span>
               <span class="req">Required for public access</span>
             </label>
-            <input type="text" id="domain" class="form-input" placeholder="os.example.com" value="os.blackcore.dev" oninput="updateOutput()">
+            <input type="text" id="domain" class="form-input" placeholder="os.example.com" value="os.example.com" oninput="updateOutput()">
           </div>
 
           <div class="form-group">
@@ -868,7 +892,7 @@
 
           <div class="form-group">
             <label class="form-label">Admin Email</label>
-            <input type="email" id="admin_email" class="form-input" value="admin@blackcore.dev" oninput="updateOutput()">
+            <input type="email" id="admin_email" class="form-input" value="admin@example.com" oninput="updateOutput()">
           </div>
 
           <div class="form-group">
@@ -994,6 +1018,18 @@
         </div>
       </div>
     </div>
+
+    <!-- Footer -->
+    <footer>
+      <div>OpenShip Control Plane Automated Provisioning Toolkit · Ubuntu 24.04 LTS</div>
+      <div>
+        <a href="https://github.com/HomaEEE/OpenShip-deploy" target="_blank" rel="noopener">GitHub Repository</a>
+        &nbsp;·&nbsp;
+        <a href="https://openship.io" target="_blank" rel="noopener">OpenShip.io</a>
+        &nbsp;·&nbsp;
+        <a href="javascript:void(0)" onclick="clearFormCache()" style="opacity: 0.7;">Clear Saved Cache</a>
+      </div>
+    </footer>
   </div>
 
   <div class="toast" id="toast">✔ Command copied to clipboard!</div>
@@ -1116,8 +1152,8 @@
       flags.push(`--mode=${mode}`);
       if (!hostControl) flags.push(`--no-host-control`);
       if (domain) flags.push(`--domain=${domain}`);
-      if (proxyMode !== 'caddy') flags.push(`--proxy-mode=${proxyMode}`);
-      if (proxyMode !== 'none' && sslMode !== 'auto') flags.push(`--ssl-mode=${sslMode}`);
+      flags.push(`--proxy-mode=${proxyMode}`);
+      if (proxyMode !== 'none') flags.push(`--ssl-mode=${sslMode}`);
       if (originCert) flags.push(`--origin-cert="${originCert.replace(/\n/g, '\\n')}"`);
       if (originKey) flags.push(`--origin-key="${originKey.replace(/\n/g, '\\n')}"`);
 
@@ -1153,6 +1189,7 @@
       }
 
       document.getElementById('command-output').innerHTML = cmd;
+      saveFormCache();
     }
 
     function copyCommand() {
@@ -1180,7 +1217,104 @@
       });
     }
 
+    const CACHE_KEY = 'openship_installer_cache';
+    const CACHE_TTL_MS = 10 * 60 * 60 * 1000; // 10 hours
+
+    function saveFormCache() {
+      try {
+        const data = {
+          timestamp: Date.now(),
+          mode: document.querySelector('input[name="install_mode"]:checked')?.value || 'bare',
+          hostControl: document.getElementById('host_control').checked,
+          domain: document.getElementById('domain').value,
+          proxyMode: document.getElementById('proxy_mode').value,
+          sslMode: document.getElementById('ssl_mode').value,
+          originCert: document.getElementById('origin_cert').value,
+          originKey: document.getElementById('origin_key').value,
+          adminName: document.getElementById('admin_name').value,
+          adminEmail: document.getElementById('admin_email').value,
+          adminPassword: document.getElementById('admin_password').value,
+          hostname: document.getElementById('hostname').value,
+          timezone: document.getElementById('timezone').value,
+          sshPort: document.getElementById('ssh_port').value,
+          adminUser: document.getElementById('admin_user').value,
+          swapSize: document.getElementById('swap_size').value,
+          enableUfw: document.getElementById('enable_ufw').checked,
+          enableFail2ban: document.getElementById('enable_fail2ban').checked,
+          nonInteractive: document.getElementById('flag_non_interactive').checked,
+          dryRun: document.getElementById('flag_dry_run').checked,
+          activeTab: activeTab
+        };
+        localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+      } catch (e) {
+        console.warn('LocalStorage save failed:', e);
+      }
+    }
+
+    function loadFormCache() {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (!data.timestamp || (Date.now() - data.timestamp) > CACHE_TTL_MS) {
+          localStorage.removeItem(CACHE_KEY);
+          return;
+        }
+
+        if (data.mode) {
+          const radio = document.querySelector(`input[name="install_mode"][value="${data.mode}"]`);
+          if (radio) {
+            radio.checked = true;
+            updateMode(data.mode);
+          }
+        }
+        if (typeof data.hostControl === 'boolean') document.getElementById('host_control').checked = data.hostControl;
+        if (data.domain !== undefined) document.getElementById('domain').value = data.domain;
+        if (data.proxyMode !== undefined) document.getElementById('proxy_mode').value = data.proxyMode;
+        if (data.sslMode !== undefined) document.getElementById('ssl_mode').value = data.sslMode;
+        if (data.originCert !== undefined) document.getElementById('origin_cert').value = data.originCert;
+        if (data.originKey !== undefined) document.getElementById('origin_key').value = data.originKey;
+
+        if (data.adminName !== undefined) document.getElementById('admin_name').value = data.adminName;
+        if (data.adminEmail !== undefined) document.getElementById('admin_email').value = data.adminEmail;
+        if (data.adminPassword !== undefined) document.getElementById('admin_password').value = data.adminPassword;
+
+        if (data.hostname !== undefined) document.getElementById('hostname').value = data.hostname;
+        if (data.timezone !== undefined) document.getElementById('timezone').value = data.timezone;
+        if (data.sshPort !== undefined) document.getElementById('ssh_port').value = data.sshPort;
+        if (data.adminUser !== undefined) document.getElementById('admin_user').value = data.adminUser;
+        if (data.swapSize !== undefined) document.getElementById('swap_size').value = data.swapSize;
+        if (typeof data.enableUfw === 'boolean') document.getElementById('enable_ufw').checked = data.enableUfw;
+        if (typeof data.enableFail2ban === 'boolean') document.getElementById('enable_fail2ban').checked = data.enableFail2ban;
+
+        if (typeof data.nonInteractive === 'boolean') document.getElementById('flag_non_interactive').checked = data.nonInteractive;
+        if (typeof data.dryRun === 'boolean') document.getElementById('flag_dry_run').checked = data.dryRun;
+
+        if (data.activeTab) {
+          activeTab = data.activeTab;
+          document.querySelectorAll('.term-tab').forEach(b => b.classList.remove('active'));
+          const activeBtn = document.getElementById('tab-' + activeTab);
+          if (activeBtn) activeBtn.classList.add('active');
+        }
+
+        updateProxyMode();
+      } catch (e) {
+        console.warn('LocalStorage restore failed:', e);
+      }
+    }
+
+    function clearFormCache() {
+      localStorage.removeItem(CACHE_KEY);
+      const toast = document.getElementById('toast');
+      toast.innerText = '✔ Cache cleared! Reloading defaults...';
+      toast.style.display = 'block';
+      setTimeout(() => {
+        location.reload();
+      }, 800);
+    }
+
     // Init
+    loadFormCache();
     updateOutput();
   </script>
 </body>

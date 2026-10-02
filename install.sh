@@ -2439,14 +2439,9 @@ collect_configuration() {
         ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-true}"
         ENABLE_SWAP="${ENABLE_SWAP:-true}"
         SWAP_SIZE_GB="${SWAP_SIZE_GB:-2}"
-        OPENSHIP_ADMIN_NAME_INPUT="${OPENSHIP_ADMIN_NAME_INPUT:-Admin}"
-        OPENSHIP_ADMIN_EMAIL_INPUT="${OPENSHIP_ADMIN_EMAIL_INPUT:-admin@example.com}"
-        OPENSHIP_ADMIN_PASSWORD_INPUT="${OPENSHIP_ADMIN_PASSWORD_INPUT:-$(openssl rand -hex 16)}"
-        OPENSHIP_DOMAIN_KIND="${OPENSHIP_DOMAIN_KIND:-none}"
-        OPENSHIP_EDGE_ENABLED="${OPENSHIP_EDGE_ENABLED:-false}"
-        OPENSHIP_PROXY_MODE="${OPENSHIP_PROXY_MODE:-none}"
-        OPENSHIP_NO_HOST_CONTROL="${OPENSHIP_NO_HOST_CONTROL:-false}"
-        CADDY_SSL_MODE="${CADDY_SSL_MODE:-auto}"
+        if [[ "$INSTALL_MODE" == "bare" ]]; then
+            collect_bare_openship_credentials
+        fi
         save_configuration
         return
     fi
