@@ -1774,6 +1774,8 @@ collect_bare_openship_credentials() {
         default_host="$HOSTNAME_INPUT"
     fi
     OPENSHIP_HOST="${OPENSHIP_HOST:-$default_host}"
+    OPENSHIP_HOST="${OPENSHIP_HOST#*://}"
+    OPENSHIP_HOST="${OPENSHIP_HOST%%/*}"
 
     if [[ -n "${OPENSHIP_PROXY_MODE:-}" ]]; then
         case "$OPENSHIP_PROXY_MODE" in
@@ -2787,6 +2789,13 @@ print_summary() {
         echo -e "  ${YELLOW}Cloudflare setup:${NC}"
         echo -e "  ${DIM}1. In Cloudflare DNS, set ${OPENSHIP_HOST} to 'Proxied' (orange cloud).${NC}"
         echo -e "  ${DIM}2. Under SSL/TLS, ensure encryption mode is set to 'Full (strict)'.${NC}"
+    fi
+
+    if [[ -n "${OPENSHIP_HOST:-}" ]]; then
+        echo
+        echo -e "  ${YELLOW}Self-hosted GitHub App endpoints (HTTPS mandatory):${NC}"
+        echo -e "  ${DIM}• Setup Callback:  https://${OPENSHIP_HOST}/auth/callback/github-app${NC}"
+        echo -e "  ${DIM}• Webhook URL:     https://${OPENSHIP_HOST}/api/proxy/api/webhooks/github${NC}"
     fi
 
     echo
