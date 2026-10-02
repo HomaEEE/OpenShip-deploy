@@ -677,9 +677,29 @@ install_and_update_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
+    wait_for_dpkg_lock() {
+        local max_wait=120
+        local waited=0
+        while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1 || pgrep -x "unattended-upgrades|apt.systemd.daily" >/dev/null 2>&1; do
+            if [[ $waited -ge $max_wait ]]; then
+                warn "dpkg lock held for >${max_wait}s. Stopping background upgrade services..."
+                systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+                killall -9 unattended-upgrade apt-get apt dpkg 2>/dev/null || true
+                fuser -k -9 /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock 2>/dev/null || true
+                rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock 2>/dev/null || true
+                dpkg --configure -a 2>/dev/null || true
+                break
+            fi
+            log "Waiting for background apt/dpkg update to release lock (${waited}s)..."
+            sleep 5
+            waited=$((waited + 5))
+        done
+    }
+
     # Clean up broken/expired Caddy Cloudsmith repos from previous runs before apt-get update
     rm -f /etc/apt/sources.list.d/caddy-stable.list /etc/apt/sources.list.d/caddy-stable.sources /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 
+    wait_for_dpkg_lock
     run_task "Updating package lists" apt-get update -qq
 
     run_task "Upgrading system packages" env DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
