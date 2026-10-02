@@ -15,7 +15,7 @@ fi
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/openship-services}"
 MARIA_CONTAINER="${MARIADB_CONTAINER:-}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-}"
-ROOT_PASSWORD="${MARIADB_ROOT_PASSWORD:-}"
+ROOT_PASSWORD="${DB_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}"
 FORCE=false
 
 MARIA_FILE=""
@@ -77,7 +77,7 @@ fi
 
 # Find containers
 if [ -z "$MARIA_CONTAINER" ]; then
-    for candidate in mariadb openship-openship-deploy-mariadb openship-deploy-mariadb; do
+    for candidate in shared-mariadb mariadb openship-openship-deploy-mariadb openship-deploy-mariadb; do
         if docker ps --format '{{.Names}}' | grep -qx "$candidate"; then
             MARIA_CONTAINER="$candidate"
             break
@@ -86,7 +86,7 @@ if [ -z "$MARIA_CONTAINER" ]; then
 fi
 
 if [ -z "$REDIS_CONTAINER" ]; then
-    for candidate in redis openship-openship-deploy-redis openship-deploy-redis; do
+    for candidate in shared-redis redis openship-openship-deploy-redis openship-deploy-redis; do
         if docker ps --format '{{.Names}}' | grep -qx "$candidate"; then
             REDIS_CONTAINER="$candidate"
             break

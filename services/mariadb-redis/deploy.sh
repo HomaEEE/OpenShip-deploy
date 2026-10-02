@@ -52,7 +52,7 @@ ensure_docker_and_compose() {
 }
 
 ensure_docker_network() {
-    local net_name="${OPENSHIP_NETWORK:-openship}"
+    local net_name="${OPENSHIP_NETWORK:-shared-backend}"
     if ! docker network inspect "$net_name" &>/dev/null; then
         log "Creating shared user-defined Docker network '${net_name}'..."
         docker network create             --driver bridge             --opt "com.docker.network.bridge.enable_icc=true"             "$net_name"
