@@ -1,30 +1,36 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# OpenShip Worker VPS — Initial Setup & System Tuning
+# OpenShip Worker VPS — All-in-One Setup & Tuning Script
 # ==============================================================================
 #
-# Configures and tunes an Ubuntu 24.04 / 22.04 LTS VPS for the OpenShip Worker role:
-#   - System packages update & essential utilities
-#   - Hostname and timezone configuration
-#   - Swap allocation & tuning (vm.swappiness=10, vm.vfs_cache_pressure=50)
-#   - Kernel & network sysctl tuning (BBR, somaxconn, syn_backlog, port range)
-#   - Container & database memory optimizations (vm.overcommit_memory=1, max_map_count=262144)
-#   - File descriptor & process limits (limits.d: nofile 65535, nproc 65535)
-#   - Systemd journald size bounding (SystemMaxUse=200M)
-#   - UFW firewall (SSH, HTTP :80, HTTPS :443; databases kept internal)
-#   - SSH hardening & Fail2ban jail
-#   - Automatic security updates (unattended-upgrades)
+# Standalone, self-contained provisioning and optimization script for Ubuntu
+# 24.04 / 22.04 LTS servers hosting OpenShip Edge, FrankenPHP, and containers.
 #
-# NOTE: Docker installation is intentionally excluded. Docker is handled
-# separately by OpenShip or system administrator.
+# Everything is included in this single file — zero external library dependencies.
+# Safe to execute directly via curl:
+#   curl -fsSL https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/services/server-tuning/tune.sh | sudo bash
+#
+# What it does:
+#   1. System packages update & essential utilities (btop, jq, git, ufw, fail2ban, etc.)
+#   2. Hostname and timezone configuration
+#   3. Automated Swap allocation (swappiness=10, vfs_cache_pressure=50)
+#   4. Low-latency kernel & sysctl tuning (TCP Fast Open, no-idle-slow-start, BBR)
+#   5. High-throughput 16MB network buffers + UDP buffers for HTTP/3 QUIC
+#   6. Memory dirty ratios (dirty_ratio=15, dirty_background_ratio=5)
+#   7. Database & Redis memory limits (vm.overcommit_memory=1, vm.max_map_count=262144)
+#   8. Process & file descriptor limits (nofile 65535, nproc 65535)
+#   9. Systemd journald size bounding (SystemMaxUse=200M)
+#  10. CPU Scaling Governor set to 'performance' (persistent via systemd)
+#  11. UFW Firewall: SSH, HTTP :80, HTTPS :443 tcp+udp (HTTP/3 QUIC); DBs kept private
+#  12. SSH hardening, Fail2ban jail & automatic security updates
 #
 # Usage:
 #   sudo ./tune.sh [OPTIONS]
 #
 # Options:
 #   --non-interactive       Apply configuration without interactive prompts
-#   --dry-run               Inspect system and validate configuration without modifying system
+#   --dry-run               Validate system and show parameters without modifying system
 #   --ssh-port=PORT         Override SSH port (default: 22)
 #   --swap-size=GB          Override swap size in GB (default: auto based on RAM)
 #   --admin-user=USER       Configure dedicated non-root admin user
@@ -41,7 +47,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 readonly LOG_FILE="/var/log/openship-worker-tuning.log"
 
 # Minimum RAM thresholds (Worker role)
@@ -77,6 +83,157 @@ else
 fi
 
 _TW="$(tput cols 2>/dev/null || echo 60)"
+
+# ------------------------------------------------------------------------------
+# Logging & UI Helpers
+# ------------------------------------------------------------------------------
+
+log() {
+    echo -e "  ${BLUE}·${NC} $*"
+}
+
+success() {
+    echo -e "  ${GREEN}✓${NC} $*"
+}
+
+warn() {
+    echo -e "  ${YELLOW}⚠${NC}  $*"
+}
+
+error() {
+    echo -e "  ${RED}✗${NC} $*" >&2
+}
+
+die() {
+    echo
+    error "$*"
+    echo -e "  ${DIM}Log: ${LOG_FILE}${NC}"
+    echo
+    exit 1
+}
+
+section() {
+    local title=" $* "
+    local width=$(( _TW < 72 ? _TW : 72 ))
+    local pad=$(( (width - ${#title} - 2) / 2 ))
+    local line
+    printf -v line '%*s' "$width" ''
+    line="${line// /─}"
+    local prefix="${line:0:$pad}"
+    local suffix="${line:0:$(( width - pad - ${#title} ))}"
+    echo
+    echo -e "${BOLD}${CYAN}${prefix}${title}${suffix}${NC}"
+    echo
+}
+
+run_task() {
+    local msg="$1"
+    shift
+    local pid i=0
+    local frames=(
+        "[■         ]"
+        "[■■        ]"
+        "[■■■       ]"
+        "[ ■■■      ]"
+        "[  ■■■     ]"
+        "[   ■■■    ]"
+        "[    ■■■   ]"
+        "[     ■■■  ]"
+        "[      ■■■ ]"
+        "[       ■■■]"
+        "[        ■■]"
+        "[         ■]"
+    )
+
+    ("$@") >> "$LOG_FILE" 2>&1 &
+    pid=$!
+
+    if [[ -e /dev/tty && -w /dev/tty && -t 1 ]]; then
+        while kill -0 "$pid" 2>/dev/null; do
+            printf "\r  ${CYAN}%s${NC} %s..." "${frames[i]}" "$msg" >/dev/tty 2>/dev/null || break
+            i=$(( (i + 1) % ${#frames[@]} ))
+            sleep 0.1
+        done
+        wait "$pid"
+        local status=$?
+        if (( status == 0 )); then
+            printf "\r\033[K  ${GREEN}✔${NC} %s\n" "$msg" >/dev/tty 2>/dev/null || success "$msg"
+        else
+            printf "\r\033[K  ${RED}✖${NC} %s (failed, exit %d)\n" "$msg" "$status" >/dev/tty 2>/dev/null || error "$msg failed"
+            return "$status"
+        fi
+    else
+        log "${msg}..."
+        wait "$pid"
+        local status=$?
+        if (( status == 0 )); then
+            success "$msg"
+        else
+            error "$msg (failed, exit $status)"
+            return "$status"
+        fi
+    fi
+}
+
+on_error() {
+    local exit_code=$?
+    local line_no=$1
+
+    echo
+    error "Setup/Tuning failed."
+    error "Line: ${line_no}"
+    error "Exit code: ${exit_code}"
+    error "Log: ${LOG_FILE}"
+    echo
+
+    exit "$exit_code"
+}
+
+trap 'on_error ${LINENO}' ERR
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+ask_yes_no() {
+    local prompt="$1"
+    local default="${2:-Y}"
+    local answer=""
+
+    if [[ ! -e /dev/tty || ! -r /dev/tty ]]; then
+        [[ "$default" =~ ^[Yy]$ ]] && return 0 || return 1
+    fi
+
+    if [[ "$default" == "Y" ]]; then
+        read -r -p "$prompt [Y/n]: " answer </dev/tty
+        answer="${answer//[$'\r\n\t ']/}"
+        answer="${answer:-Y}"
+    else
+        read -r -p "$prompt [y/N]: " answer </dev/tty
+        answer="${answer//[$'\r\n\t ']/}"
+        answer="${answer:-N}"
+    fi
+
+    case "${answer,,}" in
+        y|yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ask_default() {
+    local prompt="$1"
+    local default="$2"
+    local value=""
+
+    if [[ ! -e /dev/tty || ! -r /dev/tty ]]; then
+        echo "$default"
+        return
+    fi
+
+    read -r -p "$prompt [$default]: " value </dev/tty
+    value="${value//[$'\r\n']/}"
+    echo "${value:-$default}"
+}
 
 # ------------------------------------------------------------------------------
 # CLI Flags & Arguments
@@ -156,81 +313,11 @@ for arg in "$@"; do
     esac
 done
 
-# ------------------------------------------------------------------------------
 # Root Check
-# ------------------------------------------------------------------------------
-
 if [[ "$EUID" -ne 0 && "$DRY_RUN" != "true" ]]; then
     echo "Error: This script must be run as root: sudo ./tune.sh" >&2
     exit 1
 fi
-
-# ------------------------------------------------------------------------------
-# Sourcing Modular Libraries (lib/common.sh, lib/system.sh, lib/security.sh)
-# ------------------------------------------------------------------------------
-# Sourcing Modular Libraries (lib/common.sh, lib/system.sh, lib/security.sh)
-# ------------------------------------------------------------------------------
-
-SCRIPT_DIR=""
-if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]:-}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
-fi
-
-REPO_DIR=""
-LIB_DIR=""
-if [[ -n "$SCRIPT_DIR" ]]; then
-    REPO_DIR="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || echo "")"
-    if [[ -n "$REPO_DIR" && -d "${REPO_DIR}/lib" ]]; then
-        LIB_DIR="${REPO_DIR}/lib"
-    fi
-fi
-
-TEMP_CLONE_DIR=""
-cleanup_tuning() {
-    if [[ -n "$TEMP_CLONE_DIR" && -d "$TEMP_CLONE_DIR" ]]; then
-        rm -rf "$TEMP_CLONE_DIR"
-    fi
-}
-trap cleanup_tuning EXIT
-
-if [[ -z "$LIB_DIR" || ! -d "$LIB_DIR" ]]; then
-    TEMP_CLONE_DIR="$(mktemp -d /tmp/openship-deploy-XXXXXX)"
-    echo "==> Fetching OpenShip Deploy libraries..."
-
-    if command -v git &>/dev/null; then
-        git clone --depth 1 https://github.com/HomaEEE/OpenShip-deploy.git "$TEMP_CLONE_DIR" >/dev/null 2>&1
-        LIB_DIR="${TEMP_CLONE_DIR}/lib"
-    elif command -v curl &>/dev/null; then
-        mkdir -p "${TEMP_CLONE_DIR}/lib"
-        readonly RAW_BASE="https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/lib"
-        curl -fsSL "${RAW_BASE}/common.sh" -o "${TEMP_CLONE_DIR}/lib/common.sh"
-        curl -fsSL "${RAW_BASE}/system.sh" -o "${TEMP_CLONE_DIR}/lib/system.sh"
-        curl -fsSL "${RAW_BASE}/security.sh" -o "${TEMP_CLONE_DIR}/lib/security.sh"
-        LIB_DIR="${TEMP_CLONE_DIR}/lib"
-    elif command -v wget &>/dev/null; then
-        mkdir -p "${TEMP_CLONE_DIR}/lib"
-        readonly RAW_BASE="https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/lib"
-        wget -qO "${TEMP_CLONE_DIR}/lib/common.sh" "${RAW_BASE}/common.sh"
-        wget -qO "${TEMP_CLONE_DIR}/lib/system.sh" "${RAW_BASE}/system.sh"
-        wget -qO "${TEMP_CLONE_DIR}/lib/security.sh" "${RAW_BASE}/security.sh"
-        LIB_DIR="${TEMP_CLONE_DIR}/lib"
-    else
-        echo "Error: Neither git, curl, nor wget is available to fetch required libraries." >&2
-        exit 1
-    fi
-fi
-
-if [[ -z "$LIB_DIR" || ! -f "${LIB_DIR}/common.sh" ]]; then
-    echo "Error: Failed to obtain required OpenShip libraries in ${LIB_DIR:-unknown}." >&2
-    exit 1
-fi
-
-# shellcheck source=lib/common.sh
-source "${LIB_DIR}/common.sh"
-# shellcheck source=lib/system.sh
-source "${LIB_DIR}/system.sh"
-# shellcheck source=lib/security.sh
-source "${LIB_DIR}/security.sh"
 
 # Ensure log directory and log file exist
 if [[ "$DRY_RUN" != "true" ]]; then
@@ -240,8 +327,24 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# Load .env configuration if present
+# Load local .env configuration if present
 # ------------------------------------------------------------------------------
+
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+fi
+
+ENV_HOSTNAME=""
+ENV_TIMEZONE=""
+ENV_SSH_PORT=""
+ENV_ADMIN_USER=""
+ENV_ENABLE_SWAP=""
+ENV_SWAP_SIZE_GB=""
+ENV_ENABLE_BBR=""
+ENV_ENABLE_UFW=""
+ENV_ENABLE_FAIL2BAN=""
+ENV_ENABLE_UNATTENDED_UPGRADES=""
 
 if [[ -n "$SCRIPT_DIR" && -f "${SCRIPT_DIR}/.env" ]]; then
     ENV_FILE="${SCRIPT_DIR}/.env"
@@ -296,24 +399,63 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# Preflight System Checks
+# System Checks & Resource Detection
 # ------------------------------------------------------------------------------
 
-if [[ "$DRY_RUN" != "true" ]]; then
-    check_os
-    check_architecture
-fi
+check_os() {
+    section "Operating system"
+
+    [[ -f /etc/os-release ]] || die "/etc/os-release not found."
+    # shellcheck disable=SC1091
+    source /etc/os-release
+
+    if [[ "${ID:-}" != "ubuntu" ]]; then
+        die "Ubuntu is required. Detected: ${ID:-unknown}"
+    fi
+
+    local major_ver="${VERSION_ID%%.*}"
+    if ! [[ "$major_ver" =~ ^[0-9]+$ ]] || (( major_ver < 22 )); then
+        warn "This script is designed for Ubuntu 22.04 / 24.04+ (detected: ${VERSION_ID:-unknown})."
+        if ! ask_yes_no "Continue anyway?" "N"; then
+            die "Setup cancelled."
+        fi
+    fi
+
+    success "Ubuntu ${VERSION_ID:-unknown}"
+}
+
+check_architecture() {
+    section "Architecture"
+
+    local arch
+    arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+
+    case "$arch" in
+        amd64|x86_64|arm64|aarch64)
+            success "Architecture: ${arch}"
+            ;;
+        *)
+            die "Unsupported architecture: ${arch}"
+            ;;
+    esac
+}
 
 detect_worker_resources() {
     if [[ -f /proc/meminfo ]]; then
-        detect_resources
+        RAM_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 2048)"
+        DISK_GB="$(df -BG / | awk 'NR==2 {gsub("G","",$4); print $4}' 2>/dev/null || echo 50)"
+        CPU_COUNT="$(nproc 2>/dev/null || echo 2)"
     else
-        # Fallback for non-Linux or simulated environments (e.g. testing --dry-run)
         RAM_MB="${RAM_MB:-2048}"
         DISK_GB="${DISK_GB:-50}"
         CPU_COUNT="${CPU_COUNT:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
     fi
 }
+
+if [[ "$DRY_RUN" != "true" ]]; then
+    check_os
+    check_architecture
+fi
 
 detect_worker_resources
 
@@ -341,7 +483,7 @@ fi
 # ------------------------------------------------------------------------------
 
 if [[ "$NON_INTERACTIVE" != "true" && ( ! -e /dev/tty || ! -r /dev/tty ) ]]; then
-    warn "No interactive TTY detected (/dev/tty). Running in non-interactive mode."
+    warn "No interactive TTY detected. Running in non-interactive mode with defaults."
     NON_INTERACTIVE=true
 fi
 
@@ -370,7 +512,7 @@ if [[ "$NON_INTERACTIVE" != "true" && "$DRY_RUN" != "true" ]]; then
     fi
 
     if [[ "$SKIP_UFW" != "true" ]]; then
-        if ask_yes_no "Configure UFW firewall (SSH :${SSH_PORT_INPUT}, HTTP :80, HTTPS :443)?" "Y"; then
+        if ask_yes_no "Configure UFW firewall (SSH :${SSH_PORT_INPUT}, HTTP :80, HTTPS :443 tcp+udp)?" "Y"; then
             ENABLE_UFW="true"
         else
             ENABLE_UFW="false"
@@ -379,14 +521,14 @@ if [[ "$NON_INTERACTIVE" != "true" && "$DRY_RUN" != "true" ]]; then
 
     echo
     echo -e "${BOLD}Summary of configuration:${NC}"
-    echo "  Hostname:            ${HOSTNAME_INPUT}"
-    echo "  Timezone:            ${TIMEZONE_INPUT}"
-    echo "  Swap:                ${ENABLE_SWAP} (${SWAP_SIZE_GB} GB)"
-    echo "  SSH Port:            ${SSH_PORT_INPUT}"
-    echo "  Admin User:          ${ADMIN_USER_INPUT:-<none>}"
-    echo "  UFW Firewall:        ${ENABLE_UFW}"
-    echo "  Fail2ban:            ${ENABLE_FAIL2BAN}"
-    echo "  BBR Congestion:      ${ENABLE_BBR}"
+    echo "  Hostname:              ${HOSTNAME_INPUT}"
+    echo "  Timezone:              ${TIMEZONE_INPUT}"
+    echo "  Swap:                  ${ENABLE_SWAP} (${SWAP_SIZE_GB} GB)"
+    echo "  SSH Port:              ${SSH_PORT_INPUT}"
+    echo "  Admin User:            ${ADMIN_USER_INPUT:-<none>}"
+    echo "  UFW Firewall:          ${ENABLE_UFW}"
+    echo "  Fail2ban:              ${ENABLE_FAIL2BAN}"
+    echo "  BBR & Low-Latency:     ${ENABLE_BBR}"
     echo "  Auto Security Updates: ${ENABLE_UNATTENDED_UPGRADES}"
     echo
 
@@ -420,7 +562,33 @@ fi
 # Step 1: Hostname & Timezone
 # ------------------------------------------------------------------------------
 
-if [[ -n "$HOSTNAME_INPUT" && "$HOSTNAME_INPUT" != "$(hostname)" ]]; then
+configure_hostname() {
+    section "Hostname"
+    hostnamectl set-hostname "$HOSTNAME_INPUT" 2>/dev/null || true
+
+    if grep -qE '^127\.0\.1\.1[[:space:]]+' /etc/hosts 2>/dev/null; then
+        sed -i "s/^127\.0\.1\.1.*/127.0.1.1 ${HOSTNAME_INPUT}/" /etc/hosts 2>/dev/null || true
+    else
+        echo "127.0.1.1 ${HOSTNAME_INPUT}" >> /etc/hosts 2>/dev/null || true
+    fi
+
+    success "Hostname: ${HOSTNAME_INPUT}"
+}
+
+configure_timezone() {
+    section "Timezone"
+
+    if timedatectl set-timezone "$TIMEZONE_INPUT" 2>/dev/null; then
+        success "Timezone: ${TIMEZONE_INPUT}"
+    else
+        warn "Failed to set timezone '${TIMEZONE_INPUT}'. Falling back to UTC."
+        TIMEZONE_INPUT="UTC"
+        timedatectl set-timezone UTC 2>/dev/null || true
+        warn "Timezone set to UTC."
+    fi
+}
+
+if [[ -n "$HOSTNAME_INPUT" && "$HOSTNAME_INPUT" != "$(hostname 2>/dev/null || echo "")" ]]; then
     configure_hostname
 fi
 
@@ -432,6 +600,46 @@ fi
 # Step 2: System Packages & Essential Utilities
 # ------------------------------------------------------------------------------
 
+install_and_update_packages() {
+    section "System packages & update"
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Clean up broken/expired repositories if any
+    rm -f /etc/apt/sources.list.d/caddy-stable.list /etc/apt/sources.list.d/caddy-stable.sources /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
+
+    run_task "Updating package lists" apt-get update -qq
+
+    run_task "Upgrading system packages" env DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold"
+
+    run_task "Installing base utilities" apt-get install -y -qq \
+        ca-certificates \
+        curl \
+        gnupg \
+        git \
+        jq \
+        unzip \
+        rsync \
+        btop \
+        nano \
+        lsof \
+        procps \
+        dnsutils \
+        openssl \
+        ufw \
+        fail2ban \
+        unattended-upgrades \
+        systemd-timesyncd
+
+    run_task "Cleaning up unused packages" bash -c "apt-get autoremove -y -qq && apt-get clean -qq"
+
+    if [[ -f /var/run/reboot-required ]]; then
+        warn "A system restart is recommended after kernel updates."
+    fi
+}
+
 if [[ "$SKIP_PACKAGES" != "true" ]]; then
     install_and_update_packages
 else
@@ -442,6 +650,45 @@ fi
 # Step 3: Swap Allocation & Tuning
 # ------------------------------------------------------------------------------
 
+configure_swap() {
+    section "Swap"
+
+    if swapon --show 2>/dev/null | grep -q .; then
+        success "Swap is already active:"
+        swapon --show
+        return
+    fi
+
+    if [[ "$ENABLE_SWAP" != "true" || "${SWAP_SIZE_GB:-0}" -le 0 ]]; then
+        warn "Swap disabled by configuration."
+        return
+    fi
+
+    local swap_gb="${SWAP_SIZE_GB:-2}"
+    log "Creating ${swap_gb} GB swapfile..."
+
+    if [[ ! -f /swapfile ]]; then
+        if ! fallocate -l "${swap_gb}G" /swapfile 2>/dev/null; then
+            warn "fallocate failed, creating swapfile with dd..."
+            dd if=/dev/zero of=/swapfile bs=1M count="$((swap_gb * 1024))" status=progress
+        fi
+        chmod 600 /swapfile
+        mkswap /swapfile
+    fi
+
+    if ! swapon /swapfile 2>/dev/null; then
+        warn "swapon failed (possibly running inside container or unsupported filesystem)."
+        warn "Continuing without swap."
+        return
+    fi
+
+    if ! grep -qE '^/swapfile[[:space:]]' /etc/fstab 2>/dev/null; then
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+
+    success "${swap_gb} GB swap configured and enabled."
+}
+
 if [[ "$SKIP_SWAP" != "true" ]]; then
     configure_swap
 else
@@ -449,11 +696,11 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Step 4: Kernel & Sysctl Worker Tuning
+# Step 4: Kernel, Network & Sysctl Tuning (FrankenPHP & Low TTFB)
 # ------------------------------------------------------------------------------
 
 optimize_worker_kernel_and_limits() {
-    section "Kernel, Network & System Tuning (Worker VPS)"
+    section "Kernel, Network & System Tuning (FrankenPHP & Low TTFB)"
 
     log "Enabling systemd-timesyncd time synchronization..."
     systemctl enable --now systemd-timesyncd 2>/dev/null || true
@@ -461,9 +708,9 @@ optimize_worker_kernel_and_limits() {
     log "Configuring file descriptor & process limits (nofile/nproc 65535)..."
     cat > /etc/security/limits.d/99-openship-worker.conf <<'EOF'
 * soft nofile 65535
-* hard nofile 65535
+* hard nofile 131072
 root soft nofile 65535
-root hard nofile 65535
+root hard nofile 131072
 * soft nproc 65535
 * hard nproc 65535
 root soft nproc 65535
@@ -499,9 +746,9 @@ EOF
         fi
     fi
 
-    log "Applying worker sysctl network and database optimizations..."
+    log "Applying worker sysctl network, low-latency and database optimizations..."
     cat > /etc/sysctl.d/99-openship-worker.conf <<EOF
-# OpenShip Worker VPS Kernel & Network Tuning
+# OpenShip Worker VPS Kernel & Network Tuning (Optimized for FrankenPHP & Containers)
 
 # Network connection backlog & buffers
 net.core.somaxconn = 65535
@@ -598,6 +845,92 @@ fi
 # Step 5: Security Hardening (Admin User, SSH, Fail2ban, Updates)
 # ------------------------------------------------------------------------------
 
+configure_admin_user() {
+    section "Administrator user"
+
+    if id "$ADMIN_USER_INPUT" >/dev/null 2>&1; then
+        log "User '${ADMIN_USER_INPUT}' already exists."
+    else
+        adduser --disabled-password --gecos "" "$ADMIN_USER_INPUT"
+    fi
+
+    usermod -aG sudo "$ADMIN_USER_INPUT"
+
+    if [[ -f /root/.ssh/authorized_keys ]]; then
+        mkdir -p "/home/${ADMIN_USER_INPUT}/.ssh"
+        cp /root/.ssh/authorized_keys "/home/${ADMIN_USER_INPUT}/.ssh/authorized_keys"
+        chown -R "${ADMIN_USER_INPUT}:${ADMIN_USER_INPUT}" "/home/${ADMIN_USER_INPUT}/.ssh"
+        chmod 700 "/home/${ADMIN_USER_INPUT}/.ssh"
+        chmod 600 "/home/${ADMIN_USER_INPUT}/.ssh/authorized_keys"
+        success "SSH key copied to ${ADMIN_USER_INPUT}."
+    else
+        warn "No /root/.ssh/authorized_keys found."
+    fi
+}
+
+configure_ssh() {
+    section "SSH hardening"
+
+    local config="/etc/ssh/sshd_config.d/99-openship-worker.conf"
+    mkdir -p "$(dirname "$config")"
+
+    {
+        echo "# OpenShip Worker VPS SSH Configuration"
+        echo
+        echo "Port ${SSH_PORT_INPUT}"
+        echo
+        echo "PubkeyAuthentication yes"
+        echo "KbdInteractiveAuthentication no"
+        echo
+        echo "X11Forwarding no"
+        echo "AllowAgentForwarding no"
+    } > "$config"
+
+    if [[ -n "$ADMIN_USER_INPUT" && -f "/home/${ADMIN_USER_INPUT}/.ssh/authorized_keys" ]]; then
+        cat >> "$config" <<'EOF'
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+EOF
+        success "SSH password authentication disabled."
+    else
+        warn "Password authentication remains enabled to prevent lockout."
+    fi
+
+    if sshd -t 2>/dev/null; then
+        systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+        success "SSH configuration validated on port ${SSH_PORT_INPUT}."
+    else
+        warn "sshd -t test returned warning; config preserved."
+    fi
+}
+
+configure_fail2ban() {
+    section "Fail2ban"
+
+    mkdir -p /etc/fail2ban/jail.d
+
+    cat > /etc/fail2ban/jail.d/sshd-openship.local <<EOF
+[sshd]
+enabled = true
+port = ${SSH_PORT_INPUT}
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
+EOF
+
+    systemctl enable fail2ban 2>/dev/null || true
+    systemctl restart fail2ban 2>/dev/null || true
+
+    success "Fail2ban enabled."
+}
+
+configure_unattended_upgrades() {
+    section "Automatic security updates"
+    systemctl enable --now unattended-upgrades 2>/dev/null || true
+    success "Unattended upgrades enabled."
+}
+
 if [[ -n "$ADMIN_USER_INPUT" ]]; then
     configure_admin_user
 fi
@@ -675,7 +1008,7 @@ section "Tuning Complete"
 echo -e "${GREEN}${BOLD}Worker VPS tuning successfully finished!${NC}"
 echo
 echo "Applied settings:"
-echo "  • System packages:   up to date"
+echo "  • System packages:   up to date (base utilities installed)"
 echo "  • Time sync:         systemd-timesyncd active"
 echo "  • Journald:          bounded to 200MB"
 echo "  • Limits:            nofile 65535, nproc 65535"
