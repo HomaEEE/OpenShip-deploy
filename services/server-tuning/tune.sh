@@ -168,10 +168,22 @@ fi
 # ------------------------------------------------------------------------------
 # Sourcing Modular Libraries (lib/common.sh, lib/system.sh, lib/security.sh)
 # ------------------------------------------------------------------------------
+# Sourcing Modular Libraries (lib/common.sh, lib/system.sh, lib/security.sh)
+# ------------------------------------------------------------------------------
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
-REPO_DIR="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || echo "")"
-LIB_DIR="${REPO_DIR}/lib"
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+fi
+
+REPO_DIR=""
+LIB_DIR=""
+if [[ -n "$SCRIPT_DIR" ]]; then
+    REPO_DIR="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || echo "")"
+    if [[ -n "$REPO_DIR" && -d "${REPO_DIR}/lib" ]]; then
+        LIB_DIR="${REPO_DIR}/lib"
+    fi
+fi
 
 TEMP_CLONE_DIR=""
 cleanup_tuning() {
@@ -181,16 +193,36 @@ cleanup_tuning() {
 }
 trap cleanup_tuning EXIT
 
-if [[ ! -d "$LIB_DIR" ]]; then
+if [[ -z "$LIB_DIR" || ! -d "$LIB_DIR" ]]; then
+    TEMP_CLONE_DIR="$(mktemp -d /tmp/openship-deploy-XXXXXX)"
+    echo "==> Fetching OpenShip Deploy libraries..."
+
     if command -v git &>/dev/null; then
-        TEMP_CLONE_DIR="$(mktemp -d /tmp/openship-deploy-XXXXXX)"
-        echo "==> Fetching OpenShip Deploy libraries..."
         git clone --depth 1 https://github.com/HomaEEE/OpenShip-deploy.git "$TEMP_CLONE_DIR" >/dev/null 2>&1
         LIB_DIR="${TEMP_CLONE_DIR}/lib"
+    elif command -v curl &>/dev/null; then
+        mkdir -p "${TEMP_CLONE_DIR}/lib"
+        readonly RAW_BASE="https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/lib"
+        curl -fsSL "${RAW_BASE}/common.sh" -o "${TEMP_CLONE_DIR}/lib/common.sh"
+        curl -fsSL "${RAW_BASE}/system.sh" -o "${TEMP_CLONE_DIR}/lib/system.sh"
+        curl -fsSL "${RAW_BASE}/security.sh" -o "${TEMP_CLONE_DIR}/lib/security.sh"
+        LIB_DIR="${TEMP_CLONE_DIR}/lib"
+    elif command -v wget &>/dev/null; then
+        mkdir -p "${TEMP_CLONE_DIR}/lib"
+        readonly RAW_BASE="https://raw.githubusercontent.com/HomaEEE/OpenShip-deploy/main/lib"
+        wget -qO "${TEMP_CLONE_DIR}/lib/common.sh" "${RAW_BASE}/common.sh"
+        wget -qO "${TEMP_CLONE_DIR}/lib/system.sh" "${RAW_BASE}/system.sh"
+        wget -qO "${TEMP_CLONE_DIR}/lib/security.sh" "${RAW_BASE}/security.sh"
+        LIB_DIR="${TEMP_CLONE_DIR}/lib"
     else
-        echo "Error: Required libraries not found at ${LIB_DIR} and git is not available." >&2
+        echo "Error: Neither git, curl, nor wget is available to fetch required libraries." >&2
         exit 1
     fi
+fi
+
+if [[ -z "$LIB_DIR" || ! -f "${LIB_DIR}/common.sh" ]]; then
+    echo "Error: Failed to obtain required OpenShip libraries in ${LIB_DIR:-unknown}." >&2
+    exit 1
 fi
 
 # shellcheck source=lib/common.sh
@@ -211,8 +243,8 @@ fi
 # Load .env configuration if present
 # ------------------------------------------------------------------------------
 
-ENV_FILE="${SCRIPT_DIR}/.env"
-if [[ -f "$ENV_FILE" ]]; then
+if [[ -n "$SCRIPT_DIR" && -f "${SCRIPT_DIR}/.env" ]]; then
+    ENV_FILE="${SCRIPT_DIR}/.env"
     log "Loading configuration from ${ENV_FILE}..."
     while IFS="=" read -r key val || [[ -n "$key" ]]; do
         [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
@@ -307,6 +339,11 @@ fi
 # ------------------------------------------------------------------------------
 # Interactive Configuration (unless --non-interactive)
 # ------------------------------------------------------------------------------
+
+if [[ "$NON_INTERACTIVE" != "true" && ( ! -e /dev/tty || ! -r /dev/tty ) ]]; then
+    warn "No interactive TTY detected (/dev/tty). Running in non-interactive mode."
+    NON_INTERACTIVE=true
+fi
 
 if [[ "$NON_INTERACTIVE" != "true" && "$DRY_RUN" != "true" ]]; then
     section "Configuration parameters"
