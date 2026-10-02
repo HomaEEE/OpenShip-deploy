@@ -114,9 +114,17 @@ configure_ufw() {
         ufw allow 443/tcp \
             comment "Web HTTPS"
 
-        log "UFW: opened :80 (ACME challenge) and :443 (TLS) for web traffic."
+        ufw allow 443/udp \
+            comment "Web HTTPS (HTTP/3 QUIC)"
+
+        log "UFW: opened :80 (ACME challenge), :443/tcp (TLS), and :443/udp (HTTP/3 QUIC) for web traffic."
     else
         log "UFW: Private mode — :80/:443 NOT opened (no public proxy)."
+    fi
+
+    # Ensure Docker container bridge forwarding is permitted by UFW
+    if [[ -f /etc/default/ufw ]]; then
+        sed -i -E 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw 2>/dev/null || true
     fi
 
     # Repair any corrupted single quotes in UFW rule files
@@ -135,7 +143,7 @@ configure_ufw() {
 
     ufw --force enable
 
-    success "UFW enabled (ports 3001/4000 secured)."
+    success "UFW enabled (ports 3001/4000 secured, Docker bridge forwarding enabled)."
 }
 
 # ------------------------------------------------------------------------------

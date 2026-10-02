@@ -28,23 +28,36 @@ sudo ./services/server-tuning/tune.sh --non-interactive
 
 ## Что настраивает скрипт
 
-1. **FrankenPHP & Низкий TTFB (`/etc/sysctl.d/99-openship-worker.conf`)**:
+1. **Docker Runtime & Контейнеры**:
+   - `userland-proxy: false` — отключен `docker-proxy`, прямое iptables-проксирование (экономия RAM на порт).
+   - `storage-driver: overlay2`, `cgroupdriver=systemd`, `live-restore: true`.
+   - Лимит логов контейнеров: `5m` (максимум 2 файла).
+   - Еженедельный таймер очистки `docker-prune.timer` (удаление dangling образов и кеша билдера без сброса volumes).
+   - Разрешен bridge forwarding в UFW (`DEFAULT_FORWARD_POLICY="ACCEPT"`), модули `br_netfilter` и `overlay`.
+2. **FrankenPHP & Низкий TTFB (`/etc/sysctl.d/99-openship-worker.conf`)**:
    - `tcp_fastopen = 3` (минус 1 RTT на хэндшейк), `tcp_slow_start_after_idle = 0` (нет троттлинга keep-alive).
    - TCP BBR (`default_qdisc = fq`, `tcp_congestion_control = bbr`).
    - Быстрый оборот портов: `tcp_tw_reuse = 1`, `tcp_fin_timeout = 15`, диапазон портов `1024 65535`.
-   - 16MB сетевые сокет-буферы + UDP буферы под HTTP/3 QUIC (`rmem_default = 262144`).
-   - Сброс грязных страниц без I/O фризов: `vm.dirty_ratio = 15`, `vm.dirty_background_ratio = 5`.
-   - Память под MariaDB и Redis: `vm.overcommit_memory = 1`, `vm.max_map_count = 262144`.
-2. **CPU Governor**:
+   - Динамические сокет-буферы (4MB при RAM < 2GB, 16MB при RAM ≥ 2GB) + UDP буферы под HTTP/3 QUIC.
+   - Сброс грязных страниц: `vm.dirty_ratio = 10..15`, `vm.dirty_background_ratio = 3..5`.
+   - Тюнинг Conntrack NAT контейнеров: `nf_conntrack_max = 262144`, таймаут `established = 600s`.
+   - ARP таблица: пороги `1024 / 2048 / 4096` для множества `veth` интерфейсов.
+   - Память под MariaDB и Redis: `vm.overcommit_memory = 1`, `vm.max_map_count = 262144`, `min_free_kbytes`.
+3. **Transparent HugePages & Диск**:
+   - THP = `never` (персистентно через systemd) — нет скачков latency и фрагментации RAM в базах данных.
+   - `noatime` в `/etc/fstab` (устранение лишних записей при чтении файлов) + I/O scheduler `none mq-deadline` для NVMe/SSD.
+4. **CPU Governor**:
    - Перевод процессора в режим `performance` (устранение задержек масштабирования частоты, персистентно через systemd).
-3. **Лимиты и логи**:
+5. **Лимиты и очистка памяти**:
    - `nofile 65535` и `nproc 65535` для root и всех пользователей (`/etc/security/limits.d/99-openship-worker.conf`).
-   - Ограничение systemd journald до 200MB.
-4. **Swap**:
-   - Автоматический swapfile (2GB при RAM ≤ 2GB, 4GB при RAM > 2GB) с `vm.swappiness = 10`.
-5. **Безопасность (UFW & Fail2ban)**:
+   - Отключение фоновых сервисов (`cloud-init`, `snapd`, `multipathd` и др. — освобождает 100-150MB RAM).
+   - Перенос `apt-daily` таймеров на ночь (03:30). Ограничение journald (50MB при < 2GB RAM).
+6. **Swap (Гибридный zRAM + Swapfile)**:
+   - zRAM (lz4, 50% RAM, priority 100) — сжатие в оперативной памяти.
+   - Дисковый swapfile (priority 10) как резервный буфер при сильных пиках.
+7. **Безопасность (UFW & Fail2ban)**:
    - Открыты порты: SSH (дефолт 22), `80/tcp` (HTTP), `443/tcp` и `443/udp` (HTTP/3 QUIC).
-   - Базы данных закрыты от внешнего мира. Fail2ban для SSH.
+   - Базы данных изолированы внутри Docker bridge сети. Fail2ban для SSH.
 
 ---
 

@@ -58,16 +58,42 @@ configure_docker() {
 
     section "Docker configuration"
 
+    # Ensure overlay and br_netfilter kernel modules are loaded for container networking
+    mkdir -p /etc/modules-load.d
+    cat > /etc/modules-load.d/docker.conf <<'EOF'
+overlay
+br_netfilter
+EOF
+    modprobe overlay 2>/dev/null || true
+    modprobe br_netfilter 2>/dev/null || true
+
     mkdir -p /etc/docker
 
     cat > /etc/docker/daemon.json <<'EOF'
 {
   "log-driver": "json-file",
   "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
+    "max-size": "5m",
+    "max-file": "2"
   },
-  "live-restore": true
+  "live-restore": true,
+  "userland-proxy": false,
+  "storage-driver": "overlay2",
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "max-concurrent-downloads": 2,
+  "max-concurrent-uploads": 2,
+  "default-ulimits": {
+    "nofile": {
+      "Name": "nofile",
+      "Hard": 65535,
+      "Soft": 65535
+    },
+    "nproc": {
+      "Name": "nproc",
+      "Hard": 65535,
+      "Soft": 65535
+    }
+  }
 }
 EOF
 
@@ -75,7 +101,36 @@ EOF
 
     docker info >/dev/null
 
-    success "Docker daemon configured."
+    # Setup automatic weekly Docker prune timer (reclaims disk without touching named volumes)
+    mkdir -p /etc/systemd/system
+    cat > /etc/systemd/system/docker-prune.service <<'EOF'
+[Unit]
+Description=Docker System Prune (reclaim unused disk)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker system prune -f --volumes=false
+ExecStartPost=-/usr/bin/docker builder prune -f --keep-storage 2GB
+EOF
+
+    cat > /etc/systemd/system/docker-prune.timer <<'EOF'
+[Unit]
+Description=Weekly Docker Prune Timer
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable --now docker-prune.timer 2>/dev/null || true
+
+    success "Docker daemon configured & optimized (overlay2, systemd cgroup, prune timer)."
 }
 
 # ------------------------------------------------------------------------------

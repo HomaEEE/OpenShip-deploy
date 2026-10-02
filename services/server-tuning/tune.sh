@@ -631,7 +631,8 @@ install_and_update_packages() {
         ufw \
         fail2ban \
         unattended-upgrades \
-        systemd-timesyncd
+        systemd-timesyncd \
+        zram-tools
 
     run_task "Cleaning up unused packages" bash -c "apt-get autoremove -y -qq && apt-get clean -qq"
 
@@ -647,46 +648,122 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Step 3: Swap Allocation & Tuning
+# Freeing Memory (Unused Background Daemons)
+# ------------------------------------------------------------------------------
+
+disable_unused_services() {
+    section "Freeing memory (unused services)"
+    local services=(
+        snapd.service
+        snapd.socket
+        snapd.seeded.service
+        multipathd.service
+        multipathd.socket
+        ModemManager.service
+        packagekit.service
+        whoopsie.service
+        apport.service
+    )
+    for svc in "${services[@]}"; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null || systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+            log "Disabling unused service: ${svc}..."
+            systemctl stop "$svc" 2>/dev/null || true
+            systemctl disable "$svc" 2>/dev/null || true
+            systemctl mask "$svc" 2>/dev/null || true
+        fi
+    done
+
+    # Disable cloud-init after install to prevent memory usage & background checks
+    if command_exists cloud-init || [[ -d /etc/cloud ]]; then
+        mkdir -p /etc/cloud
+        touch /etc/cloud/cloud-init.disabled
+        for ci_svc in cloud-init.service cloud-config.service cloud-final.service cloud-init-local.service; do
+            systemctl disable "$ci_svc" 2>/dev/null || true
+            systemctl mask "$ci_svc" 2>/dev/null || true
+        done
+        log "cloud-init disabled for post-install boots."
+    fi
+
+    # Reschedule apt-daily timers to night hours (03:30) to avoid daytime CPU spikes on 1-core VPS
+    if systemctl list-unit-files apt-daily.timer &>/dev/null; then
+        mkdir -p /etc/systemd/system/apt-daily.timer.d /etc/systemd/system/apt-daily-upgrade.timer.d
+        cat > /etc/systemd/system/apt-daily.timer.d/override.conf <<'EOF'
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30m
+Persistent=true
+EOF
+        cat > /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf <<'EOF'
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 04:15:00
+RandomizedDelaySec=30m
+Persistent=true
+EOF
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl restart apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+        log "apt-daily background maintenance rescheduled to off-peak night hours (03:30-04:45)."
+    fi
+
+    success "Unused background services disabled (freed ~100-150MB RAM)."
+}
+
+# ------------------------------------------------------------------------------
+# Step 3: Memory Compression (zRAM) & Swap
 # ------------------------------------------------------------------------------
 
 configure_swap() {
-    section "Swap"
+    section "Memory Compression (zRAM) & Swap"
 
-    if swapon --show 2>/dev/null | grep -q .; then
-        success "Swap is already active:"
-        swapon --show
+    # 1. Setup zRAM (in-memory compressed swap)
+    if command_exists zramctl || [[ -f /etc/default/zramswap ]] || modprobe zram 2>/dev/null; then
+        log "Configuring zRAM compressed memory (lz4, 50% RAM, priority 100)..."
+        mkdir -p /etc/default
+        cat > /etc/default/zramswap <<'EOF'
+ALGO=lz4
+PERCENT=50
+PRIORITY=100
+EOF
+        systemctl enable --now zramswap 2>/dev/null || true
+        success "zRAM compressed memory configured."
+    fi
+
+    # 2. Check disk swap
+    if swapon --show 2>/dev/null | grep -q '/swapfile'; then
+        success "Swapfile is already active:"
+        swapon --show 2>/dev/null || true
         return
     fi
 
     if [[ "$ENABLE_SWAP" != "true" || "${SWAP_SIZE_GB:-0}" -le 0 ]]; then
-        warn "Swap disabled by configuration."
+        warn "Disk swap disabled by configuration."
         return
     fi
 
     local swap_gb="${SWAP_SIZE_GB:-2}"
-    log "Creating ${swap_gb} GB swapfile..."
+    log "Creating ${swap_gb} GB disk swapfile (backup priority 10)..."
 
     if [[ ! -f /swapfile ]]; then
         if ! fallocate -l "${swap_gb}G" /swapfile 2>/dev/null; then
             warn "fallocate failed, creating swapfile with dd..."
-            dd if=/dev/zero of=/swapfile bs=1M count="$((swap_gb * 1024))" status=progress
+            dd if=/dev/zero of=/swapfile bs=1M count="$((swap_gb * 1024))" status=progress 2>/dev/null
         fi
         chmod 600 /swapfile
-        mkswap /swapfile
+        mkswap /swapfile >/dev/null 2>&1
     fi
 
-    if ! swapon /swapfile 2>/dev/null; then
+    if ! swapon --priority 10 /swapfile 2>/dev/null && ! swapon /swapfile 2>/dev/null; then
         warn "swapon failed (possibly running inside container or unsupported filesystem)."
-        warn "Continuing without swap."
+        warn "Continuing without disk swap."
         return
     fi
 
     if ! grep -qE '^/swapfile[[:space:]]' /etc/fstab 2>/dev/null; then
-        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        echo '/swapfile none swap sw,pri=10 0 0' >> /etc/fstab
     fi
 
-    success "${swap_gb} GB swap configured and enabled."
+    success "${swap_gb} GB disk swap configured (hybrid zRAM + swapfile active)."
 }
 
 if [[ "$SKIP_SWAP" != "true" ]]; then
@@ -702,10 +779,34 @@ fi
 optimize_worker_kernel_and_limits() {
     section "Kernel, Network & System Tuning (FrankenPHP & Low TTFB)"
 
-    log "Enabling systemd-timesyncd time synchronization..."
-    systemctl enable --now systemd-timesyncd 2>/dev/null || true
+    # 1. Stop bloat daemons to free up 100-150MB of RAM
+    disable_unused_services
 
-    log "Configuring file descriptor & process limits (nofile/nproc 65535)..."
+    # 2. Time sync & weekly SSD TRIM
+    log "Enabling systemd-timesyncd time synchronization & fstrim..."
+    systemctl enable --now systemd-timesyncd 2>/dev/null || true
+    systemctl enable --now fstrim.timer 2>/dev/null || true
+
+    # 3. Dynamic resource thresholds
+    local sock_buf_max=16777216
+    local dirty_ratio=15
+    local dirty_bg_ratio=5
+    local journal_max="150M"
+    local journal_runtime="75M"
+    local min_free_kb=65536
+
+    if (( RAM_MB < 2048 )); then
+        sock_buf_max=4194304
+        dirty_ratio=10
+        dirty_bg_ratio=3
+        journal_max="50M"
+        journal_runtime="25M"
+        min_free_kb=32768
+        log "Low-memory profile (< 2GB RAM): dynamic 4MB socket buffers, 50MB journald."
+    fi
+
+    # 4. File descriptor & process limits
+    log "Configuring file descriptor & process limits (nofile 65535, nproc 65535)..."
     cat > /etc/security/limits.d/99-openship-worker.conf <<'EOF'
 * soft nofile 65535
 * hard nofile 131072
@@ -724,16 +825,17 @@ EOF
         fi
     done
 
-    log "Configuring systemd journal limit (SystemMaxUse=200M)..."
+    # 5. Journald size limit
+    log "Configuring systemd journal limit (SystemMaxUse=${journal_max})..."
     mkdir -p /etc/systemd/journald.conf.d
-    cat > /etc/systemd/journald.conf.d/99-openship.conf <<'EOF'
+    cat > /etc/systemd/journald.conf.d/99-openship.conf <<EOF
 [Journal]
-SystemMaxUse=200M
-RuntimeMaxUse=100M
+SystemMaxUse=${journal_max}
+RuntimeMaxUse=${journal_runtime}
 EOF
     systemctl restart systemd-journald 2>/dev/null || true
 
-    # TCP BBR Congestion Control
+    # 6. TCP BBR Congestion Control
     local bbr_applied=false
     if [[ "$ENABLE_BBR" == "true" ]]; then
         if modprobe tcp_bbr 2>/dev/null; then
@@ -746,6 +848,8 @@ EOF
         fi
     fi
 
+    # 7. Sysctl low-latency & memory tuning
+    modprobe br_netfilter 2>/dev/null || true
     log "Applying worker sysctl network, low-latency and database optimizations..."
     cat > /etc/sysctl.d/99-openship-worker.conf <<EOF
 # OpenShip Worker VPS Kernel & Network Tuning (Optimized for FrankenPHP & Containers)
@@ -755,13 +859,13 @@ net.core.somaxconn = 65535
 net.ipv4.tcp_max_syn_backlog = 65535
 net.core.netdev_max_backlog = 65535
 
-# Socket buffer sizes (16MB high-throughput buffers + UDP defaults for HTTP/3 QUIC)
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
+# Socket buffer sizes (Dynamic based on RAM + UDP defaults for HTTP/3 QUIC)
+net.core.rmem_max = ${sock_buf_max}
+net.core.wmem_max = ${sock_buf_max}
 net.core.rmem_default = 262144
 net.core.wmem_default = 262144
-net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 87380 16777216
+net.ipv4.tcp_rmem = 4096 87380 ${sock_buf_max}
+net.ipv4.tcp_wmem = 4096 87380 ${sock_buf_max}
 
 # TCP Fast Open & Low Latency (reduces TTFB by 1 RTT)
 net.ipv4.tcp_fastopen = 3
@@ -780,17 +884,37 @@ net.ipv4.tcp_keepalive_probes = 5
 # Memory management for Redis background save & MariaDB
 vm.overcommit_memory = 1
 vm.max_map_count = 262144
-vm.swappiness = 10
+vm.min_free_kbytes = ${min_free_kb}
+vm.panic_on_oom = 0
+vm.oom_kill_allocating_task = 0
+vm.swappiness = 20
 vm.vfs_cache_pressure = 50
 
 # Memory dirty writeback ratios (prevents I/O write freezes)
-vm.dirty_ratio = 15
-vm.dirty_background_ratio = 5
+vm.dirty_ratio = ${dirty_ratio}
+vm.dirty_background_ratio = ${dirty_bg_ratio}
+
+# Docker Bridge & IP Forwarding
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+
+# Connection tracking & Container NAT
+net.netfilter.nf_conntrack_max = 262144
+net.netfilter.nf_conntrack_tcp_timeout_established = 600
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+net.netfilter.nf_conntrack_tcp_timeout_close_wait = 15
+net.netfilter.nf_conntrack_tcp_timeout_fin_wait = 15
+
+# ARP neighbor table limits for container veth interfaces
+net.ipv4.neigh.default.gc_thresh1 = 1024
+net.ipv4.neigh.default.gc_thresh2 = 2048
+net.ipv4.neigh.default.gc_thresh3 = 4096
 
 # File system & inotify watchers
 fs.file-max = 2097152
 fs.inotify.max_user_watches = 524288
-fs.inotify.max_user_instances = 512
+fs.inotify.max_user_instances = 1024
 EOF
 
     if [[ "$bbr_applied" == "true" ]]; then
@@ -834,9 +958,144 @@ EOF
     fi
 }
 
+configure_thp() {
+    section "Transparent HugePages (THP)"
+    log "Disabling Transparent HugePages (never) to eliminate memory bloat & latency spikes..."
+    echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+    echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
+
+    mkdir -p /etc/systemd/system
+    cat > /etc/systemd/system/disable-thp.service <<'EOF'
+[Unit]
+Description=Disable Transparent HugePages
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true; echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=basic.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable disable-thp.service 2>/dev/null || true
+    success "Transparent HugePages disabled (persistent via systemd)."
+}
+
+configure_disk_io() {
+    section "Disk I/O & Filesystem Tuning"
+
+    # 1. Enable noatime for root mount in /etc/fstab to eliminate disk write overhead on file reads
+    log "Configuring 'noatime' mount option for root filesystem..."
+    mount -o remount,noatime / 2>/dev/null || true
+    if [[ -f /etc/fstab ]]; then
+        if grep -E '\s+/\s+' /etc/fstab | grep -q 'relatime'; then
+            sed -i -E '/\s+\/\s+/ s/relatime/noatime/' /etc/fstab
+            log "Updated /etc/fstab: replaced relatime with noatime on /."
+        elif grep -E '\s+/\s+' /etc/fstab | grep -q 'defaults'; then
+            sed -i -E '/\s+\/\s+/ s/defaults/defaults,noatime/' /etc/fstab
+            log "Updated /etc/fstab: added noatime to defaults on /."
+        fi
+    fi
+
+    # 2. Set I/O scheduler to mq-deadline or none for NVMe/SSD
+    log "Configuring I/O scheduler (mq-deadline/none) for NVMe/SSD block devices..."
+    mkdir -p /etc/udev/rules.d
+    cat > /etc/udev/rules.d/60-io-schedulers.rules <<'EOF'
+# OpenShip: Low-latency I/O scheduler for SSD / NVMe
+ACTION=="add|change", KERNEL=="nvme[0-9]*|sd[a-z]|vd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none mq-deadline"
+EOF
+    udevadm control --reload 2>/dev/null || true
+    udevadm trigger --subsystem-match=block 2>/dev/null || true
+
+    success "Disk I/O tuning (noatime + SSD queue scheduler) applied."
+}
+
+configure_docker() {
+    if command_exists docker; then
+        section "Docker daemon optimization"
+
+        # Ensure overlay and br_netfilter kernel modules are loaded for container networking
+        mkdir -p /etc/modules-load.d
+        cat > /etc/modules-load.d/docker.conf <<'EOF'
+overlay
+br_netfilter
+EOF
+        modprobe overlay 2>/dev/null || true
+        modprobe br_netfilter 2>/dev/null || true
+
+        mkdir -p /etc/docker
+        cat > /etc/docker/daemon.json <<'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "5m",
+    "max-file": "2"
+  },
+  "live-restore": true,
+  "userland-proxy": false,
+  "storage-driver": "overlay2",
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "max-concurrent-downloads": 2,
+  "max-concurrent-uploads": 2,
+  "default-ulimits": {
+    "nofile": {
+      "Name": "nofile",
+      "Hard": 65535,
+      "Soft": 65535
+    },
+    "nproc": {
+      "Name": "nproc",
+      "Hard": 65535,
+      "Soft": 65535
+    }
+  }
+}
+EOF
+        systemctl restart docker 2>/dev/null || true
+
+        # Setup automatic weekly Docker prune timer (reclaims disk without touching named volumes)
+        mkdir -p /etc/systemd/system
+        cat > /etc/systemd/system/docker-prune.service <<'EOF'
+[Unit]
+Description=Docker System Prune (reclaim unused disk)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker system prune -f --volumes=false
+ExecStartPost=-/usr/bin/docker builder prune -f --keep-storage 2GB
+EOF
+
+        cat > /etc/systemd/system/docker-prune.timer <<'EOF'
+[Unit]
+Description=Weekly Docker Prune Timer
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+EOF
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable --now docker-prune.timer 2>/dev/null || true
+
+        success "Docker daemon optimized (overlay2, systemd cgroup, userland-proxy: false, 5m logs, prune timer)."
+    fi
+}
+
 if [[ "$SKIP_SYSCTL" != "true" ]]; then
     optimize_worker_kernel_and_limits
     configure_cpu_governor
+    configure_thp
+    configure_disk_io
+    configure_docker
 else
     warn "Kernel & sysctl tuning skipped (--skip-sysctl)."
 fi
@@ -971,6 +1230,11 @@ configure_worker_ufw() {
     ufw allow 80/tcp comment "Web HTTP (OpenShip Edge)"
     ufw allow 443/tcp comment "Web HTTPS (OpenShip Edge)"
     ufw allow 443/udp comment "Web HTTPS HTTP/3 QUIC (FrankenPHP / Caddy)"
+
+    # Ensure Docker container bridge forwarding is permitted by UFW
+    if [[ -f /etc/default/ufw ]]; then
+        sed -i -E 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw 2>/dev/null || true
+    fi
 
     # Ensure internal databases are not exposed externally
     ufw delete allow 3306/tcp >/dev/null 2>&1 || true
