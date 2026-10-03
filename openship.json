@@ -13,7 +13,11 @@
       "secret": true
     },
     "ENABLE_PHPMYADMIN": {
-      "value": "false",
+      "value": "true",
+      "secret": false
+    },
+    "PHPMYADMIN_DOMAIN": {
+      "value": "pma.localhost",
       "secret": false
     }
   }
