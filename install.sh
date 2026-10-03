@@ -2115,8 +2115,10 @@ run_bare_openship_setup() {
 
     openship "${args[@]}"
 
-    # Ensure systemd service persistently sets public URL and trusted origins for terminal WebSockets
+    # Ensure systemd service persistently sets public URL and trusted origins for terminal WebSockets & GitHub App manifests
     if [[ -n "$OPENSHIP_PUBLIC_URL" ]]; then
+        mkdir -p /root/.openship
+        echo "{\"publicUrl\":\"${OPENSHIP_PUBLIC_URL}\"}" > /root/.openship/instance.json
         mkdir -p /etc/systemd/system/openship.service.d
         cat > /etc/systemd/system/openship.service.d/override.conf <<EOF
 [Service]

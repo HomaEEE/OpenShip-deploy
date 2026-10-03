@@ -80,6 +80,7 @@ if [[ -f "$STATE_FILE" ]]; then
             OPENSHIP_EDGE_ENABLED)    OPENSHIP_EDGE_ENABLED="$val" ;;
             OPENSHIP_PROXY_MODE)      OPENSHIP_PROXY_MODE="$val" ;;
             OPENSHIP_NO_HOST_CONTROL) OPENSHIP_NO_HOST_CONTROL="$val" ;;
+            OPENSHIP_PUBLIC_URL)      OPENSHIP_PUBLIC_URL="$val" ;;
         esac
     done < "$STATE_FILE"
     echo "  Mode:         ${INSTALL_MODE:-unknown}"
@@ -87,6 +88,7 @@ if [[ -f "$STATE_FILE" ]]; then
     echo "  SSH port:     ${SSH_PORT:-22}"
     echo "  Admin user:   ${ADMIN_USER:-unknown}"
     echo "  Domain:       ${OPENSHIP_HOST:-none} (${OPENSHIP_DOMAIN_KIND:-none})"
+    echo "  Public URL:   ${OPENSHIP_PUBLIC_URL:-none}"
     echo "  Edge:         ${OPENSHIP_EDGE_ENABLED:-false}"
 fi
 
@@ -111,6 +113,17 @@ if [[ -f "$STATE_FILE" ]] || command -v openship >/dev/null 2>&1; then
         else
             fail "OpenShip systemd unit (openship.service) is NOT active"
             FAILED=1
+        fi
+
+        if [[ -f /root/.openship/instance.json ]] && grep -q '"publicUrl"' /root/.openship/instance.json 2>/dev/null; then
+            local_pub_url="$(grep -o '"publicUrl": *"[^"]*"' /root/.openship/instance.json | cut -d'"' -f4)"
+            if [[ "$local_pub_url" =~ ^https:// ]]; then
+                ok "OpenShip public URL configured: $local_pub_url"
+            else
+                warn "OpenShip public URL in /root/.openship/instance.json is not HTTPS: $local_pub_url (GitHub App manifest will fail)"
+            fi
+        else
+            warn "/root/.openship/instance.json missing publicUrl (GitHub App manifest redirect_url will default to localhost)"
         fi
     fi
 
