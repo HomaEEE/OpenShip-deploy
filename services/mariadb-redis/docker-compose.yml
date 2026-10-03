@@ -27,9 +27,6 @@ services:
     volumes:
       - mariadb_data:/var/lib/mysql
 
-    networks:
-      - shared-backend
-
     mem_limit: 384m
     cpus: "0.50"
 
@@ -59,9 +56,6 @@ services:
     volumes:
       - redis_data:/data
 
-    networks:
-      - shared-backend
-
     mem_limit: 80m
     cpus: "0.25"
 
@@ -86,8 +80,6 @@ services:
     ports:
       - "${PHPMYADMIN_BIND_IP:-127.0.0.1}:${PHPMYADMIN_PORT:-20003}:80"
 
-    networks:
-      - shared-backend
 
     depends_on:
       mariadb:
@@ -106,7 +98,3 @@ services:
 volumes:
   mariadb_data:
   redis_data:
-
-networks:
-  shared-backend:
-    name: shared-backend
