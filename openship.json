@@ -16,8 +16,8 @@
       "value": "true",
       "secret": false
     },
-    "PHPMYADMIN_DOMAIN": {
-      "value": "pma.localhost",
+    "PHPMYADMIN_PORT": {
+      "value": "20003",
       "secret": false
     }
   }

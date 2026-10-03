@@ -95,7 +95,7 @@ configure_environment() {
     fi
 
     # Read current values if present
-    local maria_pass redis_pass maria_ver redis_ver maria_pool pma_ver pma_port pma_limit redis_policy net_name enable_pma pma_domain
+    local maria_pass redis_pass maria_ver redis_ver maria_pool pma_ver pma_port pma_limit redis_policy net_name enable_pma
     maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '11.4')"
     redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '7.4-alpine')"
     maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || true)"
@@ -108,7 +108,6 @@ configure_environment() {
     redis_policy="$(grep -E '^REDIS_MAXMEMORY_POLICY=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'noeviction')"
     net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'shared-backend')"
     enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo "${ENABLE_PHPMYADMIN:-true}")"
-    pma_domain="$(grep -E '^PHPMYADMIN_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo "${PHPMYADMIN_DOMAIN:-pma.localhost}")"
 
     [[ -z "$maria_ver" ]] && maria_ver="11.4"
     [[ -z "$redis_ver" ]] && redis_ver="7.4-alpine"
@@ -118,7 +117,6 @@ configure_environment() {
     [[ -z "$pma_limit" ]] && pma_limit="256M"
     [[ -z "$redis_policy" ]] && redis_policy="noeviction"
     [[ -z "$net_name" ]] && net_name="shared-backend"
-    [[ -z "$pma_domain" ]] && pma_domain="pma.localhost"
 
     # Resolve phpMyAdmin toggle (CLI flag > ENV var > existing .env > default true)
     if [[ -n "$cli_pma" ]]; then
@@ -184,7 +182,6 @@ REDIS_MAXMEMORY_POLICY=${redis_policy}
 REDIS_MEMORY_LIMIT=512M
 
 ENABLE_PHPMYADMIN=${enable_pma}
-PHPMYADMIN_DOMAIN=${pma_domain}
 PHPMYADMIN_VERSION=${pma_ver}
 PHPMYADMIN_HOST=mariadb
 PHPMYADMIN_PORT=${pma_port}
@@ -325,10 +322,9 @@ follow_logs() {
 }
 
 print_summary() {
-    local pma_port pma_ip pma_domain net_name enable_pma
+    local pma_port pma_ip net_name enable_pma
     pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '20003')"
     pma_ip="$(grep -E '^PHPMYADMIN_BIND_IP=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '127.0.0.1')"
-    pma_domain="$(grep -E '^PHPMYADMIN_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'pma.localhost')"
     net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'shared-backend')"
     enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'true')"
 
@@ -339,8 +335,8 @@ print_summary() {
     echo "MariaDB Host:          mariadb:3306"
     echo "Redis Host:            redis:6379"
     if [[ "$enable_pma" == "true" ]]; then
-        echo "phpMyAdmin Domain:     http://${pma_domain} (via Traefik / OpenShip Edge)"
         echo "phpMyAdmin Local Port: http://${pma_ip}:${pma_port} (127.0.0.1)"
+        echo "OpenShip OpenResty:    Target container 'shared-phpmyadmin:80' via Edge domain"
     else
         echo "phpMyAdmin:            Disabled (deploy with --with-pma to enable)"
     fi
