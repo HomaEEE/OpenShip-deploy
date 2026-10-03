@@ -2078,10 +2078,17 @@ run_bare_openship_setup() {
         up
         --bare
         --non-interactive
+        --port 4000
+        --dashboard-port 3001
+        --host 127.0.0.1
         --admin-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
         --admin-name "$OPENSHIP_ADMIN_NAME_INPUT"
         --domain-kind "$OPENSHIP_DOMAIN_KIND"
     )
+
+    if [[ "${OPENSHIP_PROXY_MODE:-none}" == "caddy" ]]; then
+        args+=( --trust-proxy )
+    fi
 
     # --no-host-control: prevents OpenShip from registering this VPS as a
     # managed server. Blocks dashboard terminal to Control VPS.
@@ -2093,19 +2100,19 @@ run_bare_openship_setup() {
         log "--no-host-control is DISABLED: Control VPS terminal will be accessible."
     fi
 
+    if [[ -n "${OPENSHIP_PUBLIC_URL:-}" ]]; then
+        args+=( --public-url "$OPENSHIP_PUBLIC_URL" )
+    fi
+
+    if [[ -n "${OPENSHIP_HOST:-}" ]]; then
+        args+=( --hostname "$OPENSHIP_HOST" )
+    fi
+
     if [[ "$OPENSHIP_DOMAIN_KIND" == "custom" ]]; then
         # OpenShip Edge (:80/:443 via OpenResty Docker container + Let's Encrypt TLS)
         args+=(
-            --hostname "$OPENSHIP_HOST"
-            --public-url "$OPENSHIP_PUBLIC_URL"
             --edge takeover
             --acme-email "$OPENSHIP_ADMIN_EMAIL_INPUT"
-        )
-    elif [[ "$OPENSHIP_DOMAIN_KIND" == "byo" ]]; then
-        # byo = Bring Your Own ingress (external reverse proxy handles TLS)
-        args+=(
-            --hostname "$OPENSHIP_HOST"
-            --public-url "$OPENSHIP_PUBLIC_URL"
         )
     fi
 
@@ -2125,6 +2132,12 @@ run_bare_openship_setup() {
 Environment="OPENSHIP_PUBLIC_URL=${OPENSHIP_PUBLIC_URL}"
 Environment="OPENSHIP_EXTRA_TRUSTED_ORIGINS=${OPENSHIP_PUBLIC_URL},http://${OPENSHIP_HOST},https://${OPENSHIP_HOST}"
 EOF
+        if [[ -f /etc/systemd/system/openship.service ]]; then
+            sed -i -E 's|up --foreground|up --foreground --port 4000 --dashboard-port 3001 --host 127.0.0.1 --public-url '"${OPENSHIP_PUBLIC_URL}"'|g' /etc/systemd/system/openship.service 2>/dev/null || true
+            sed -i 's/--port [0-9]* --port/--port/g' /etc/systemd/system/openship.service 2>/dev/null || true
+            sed -i 's/--dashboard-port [0-9]* --dashboard-port/--dashboard-port/g' /etc/systemd/system/openship.service 2>/dev/null || true
+            sed -i 's/--public-url [^ ]* --public-url/--public-url/g' /etc/systemd/system/openship.service 2>/dev/null || true
+        fi
         systemctl daemon-reload 2>/dev/null || true
         systemctl restart openship 2>/dev/null || true
     fi

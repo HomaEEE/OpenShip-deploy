@@ -5,9 +5,20 @@ services:
     restart: unless-stopped
 
     command:
+      - --default-storage-engine=InnoDB
       - --innodb-buffer-pool-size=192M
-      - --max-connections=30
+      - --innodb-buffer-pool-instances=1
+      - --innodb-flush-log-at-trx-commit=2
+      - --innodb-flush-method=O_DIRECT
+      - --innodb-io-capacity=2000
+      - --innodb-io-capacity-max=4000
       - --performance-schema=OFF
+      - --skip-name-resolve=1
+      - --max-connections=30
+      - --max-connect-errors=10000
+      - --thread-cache-size=16
+      - --wait-timeout=600
+      - --interactive-timeout=600
 
     environment:
       MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
@@ -15,7 +26,6 @@ services:
 
     volumes:
       - mariadb_data:/var/lib/mysql
-      - ./mariadb/conf.d:/etc/mysql/conf.d:ro
 
     networks:
       - shared-backend
@@ -68,4 +78,3 @@ volumes:
 networks:
   shared-backend:
     name: shared-backend
-    external: true

@@ -166,6 +166,11 @@ if command -v caddy >/dev/null 2>&1; then
         else
             warn "Caddyfile does NOT proxy API to 127.0.0.1:4000 (terminal WebSockets / API may fail)"
         fi
+        if grep -q "handle_path /api/proxy/\*" /etc/caddy/Caddyfile; then
+            ok "Caddyfile routes /api/proxy/* to API :4000 (terminal WebSockets enabled)"
+        else
+            warn "Caddyfile missing 'handle_path /api/proxy/*' (terminal WebSockets may fail)"
+        fi
         if grep -qE "^[a-zA-Z0-9.-]+ \{" /etc/caddy/Caddyfile && ! grep -qE "^http://" /etc/caddy/Caddyfile; then
             echo "  ℹ Cloudflare SSL tip: if 'Too Many Redirects', switch Cloudflare SSL to 'Full' or prefix domain with 'http://' in /etc/caddy/Caddyfile."
         fi
@@ -261,6 +266,18 @@ if [[ "${INSTALL_MODE:-}" == "bare" ]]; then
         ok "OpenShip API listens internally on port 4000"
     else
         warn "OpenShip API port 4000 not detected in LISTEN state."
+    fi
+
+    if curl -fsS --max-time 3 "http://127.0.0.1:4000/api/health" >/dev/null 2>&1; then
+        ok "OpenShip API responds on http://127.0.0.1:4000/api/health"
+    else
+        warn "OpenShip API not responding on http://127.0.0.1:4000/api/health"
+    fi
+
+    if curl -fsS --max-time 3 -I "http://127.0.0.1:3001" >/dev/null 2>&1; then
+        ok "OpenShip Dashboard responds on http://127.0.0.1:3001"
+    else
+        warn "OpenShip Dashboard not responding on http://127.0.0.1:3001"
     fi
 fi
 
