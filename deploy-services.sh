@@ -8,6 +8,8 @@
 #
 # Usage:
 #   sudo ./deploy-services.sh
+#   sudo ./deploy-services.sh --with-pma
+#   sudo ./deploy-services.sh --without-pma
 #   sudo ./deploy-services.sh --status
 #   sudo ./deploy-services.sh --logs
 #   sudo ./deploy-services.sh --restart

@@ -83,6 +83,7 @@ tune_mariadb_buffer_pool() {
 }
 
 configure_environment() {
+    local cli_pma="${1:-}"
     section "Configuring Environment (.env)"
 
     tune_mariadb_buffer_pool
@@ -94,27 +95,19 @@ configure_environment() {
     fi
 
     # Read current values if present
-    local maria_pass redis_pass maria_ver redis_ver maria_pool pma_ver pma_port pma_limit redis_policy net_name
-    maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '11.4')"
-    redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '7.4-alpine')"
-    maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || true)"
-    redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || true)"
-    maria_pool="$(grep -E '^MARIADB_BUFFER_POOL_SIZE=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo "${MARIADB_BUFFER_POOL_SIZE}")"
-    pma_ver="$(grep -E '^PHPMYADMIN_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo 'latest')"
-    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '20003')"
-    pma_limit="$(grep -E '^PHPMYADMIN_MEMORY_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '256M')"
-    redis_policy="$(grep -E '^REDIS_MAXMEMORY_POLICY=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo 'noeviction')"
-    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo 'openship')"
+    local maria_pass redis_pass maria_ver redis_ver maria_pool pma_ver pma_port pma_limit redis_policy net_name enable_pma compose_profiles
+    maria_ver="$(grep -E '^MARIADB_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '11.4')"
+    redis_ver="$(grep -E '^REDIS_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '7.4-alpine')"
+    maria_pass="$(grep -E '^MARIADB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || true)"
+    [[ -z "$maria_pass" ]] && maria_pass="$(grep -E '^DB_ROOT_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || true)"
+    redis_pass="$(grep -E '^REDIS_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || true)"
+    maria_pool="$(grep -E '^MARIADB_BUFFER_POOL_SIZE=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo "${MARIADB_BUFFER_POOL_SIZE}")"
+    pma_ver="$(grep -E '^PHPMYADMIN_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'latest')"
+    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '20003')"
+    pma_limit="$(grep -E '^PHPMYADMIN_MEMORY_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '256M')"
+    redis_policy="$(grep -E '^REDIS_MAXMEMORY_POLICY=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'noeviction')"
+    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'shared-backend')"
+    enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo "${ENABLE_PHPMYADMIN:-}")"
 
     [[ -z "$maria_ver" ]] && maria_ver="11.4"
     [[ -z "$redis_ver" ]] && redis_ver="7.4-alpine"
@@ -123,7 +116,36 @@ configure_environment() {
     [[ -z "$pma_port" ]] && pma_port="20003"
     [[ -z "$pma_limit" ]] && pma_limit="256M"
     [[ -z "$redis_policy" ]] && redis_policy="noeviction"
-    [[ -z "$net_name" ]] && net_name="openship"
+    [[ -z "$net_name" ]] && net_name="shared-backend"
+
+    # Resolve phpMyAdmin toggle (CLI flag > ENV var > existing .env > prompt / default false)
+    if [[ -n "$cli_pma" ]]; then
+        enable_pma="$cli_pma"
+    elif [[ -n "${ENABLE_PHPMYADMIN:-}" ]]; then
+        enable_pma="${ENABLE_PHPMYADMIN}"
+    fi
+
+    if [[ -z "$enable_pma" ]]; then
+        if [[ -t 0 ]]; then
+            read -r -p "Deploy phpMyAdmin database manager UI? [y/N]: " pma_input
+            if [[ "$pma_input" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+                enable_pma="true"
+            else
+                enable_pma="false"
+            fi
+        else
+            enable_pma="false"
+        fi
+    fi
+
+    if [[ "$enable_pma" == "true" || "$enable_pma" == "yes" || "$enable_pma" == "1" ]]; then
+        enable_pma="true"
+        compose_profiles="pma"
+    else
+        enable_pma="false"
+        compose_profiles=""
+    fi
+    export COMPOSE_PROFILES="${compose_profiles}"
 
     if [[ -z "$maria_pass" ]]; then
         if [[ -t 0 ]]; then
@@ -159,6 +181,7 @@ configure_environment() {
 # OpenShip Shared Services — MariaDB + Redis + phpMyAdmin
 # Generated on: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
+DB_ROOT_PASSWORD=${maria_pass}
 MARIADB_VERSION=${maria_ver}
 MARIADB_ROOT_PASSWORD=${maria_pass}
 MARIADB_BUFFER_POOL_SIZE=${maria_pool}
@@ -170,6 +193,8 @@ REDIS_MAXMEMORY=256mb
 REDIS_MAXMEMORY_POLICY=${redis_policy}
 REDIS_MEMORY_LIMIT=512M
 
+ENABLE_PHPMYADMIN=${enable_pma}
+COMPOSE_PROFILES=${compose_profiles}
 PHPMYADMIN_VERSION=${pma_ver}
 PHPMYADMIN_HOST=mariadb
 PHPMYADMIN_PORT=${pma_port}
@@ -181,11 +206,26 @@ OPENSHIP_NETWORK=${net_name}
 EOF
 
     chmod 600 "$ENV_FILE"
-    success "Configuration secured in ${ENV_FILE}"
+    success "Configuration secured in ${ENV_FILE} (phpMyAdmin enabled: ${enable_pma})"
 }
 
 start_services() {
-    section "Deploying MariaDB, Redis and phpMyAdmin containers"
+    local enable_pma
+    enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'false')"
+
+    if [[ "$enable_pma" == "true" ]]; then
+        export COMPOSE_PROFILES="pma"
+        section "Deploying MariaDB, Redis and phpMyAdmin containers"
+    else
+        export COMPOSE_PROFILES=""
+        section "Deploying MariaDB and Redis containers"
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -q '^(shared-phpmyadmin|phpmyadmin)$'; then
+            log "phpMyAdmin is disabled. Stopping existing container..."
+            docker stop shared-phpmyadmin phpmyadmin 2>/dev/null || true
+            docker rm shared-phpmyadmin phpmyadmin 2>/dev/null || true
+            success "phpMyAdmin container removed."
+        fi
+    fi
 
     ensure_docker_network
 
@@ -199,13 +239,20 @@ start_services() {
 
     while (( elapsed < max_wait )); do
         local maria_status redis_status pma_status
-        maria_status="$(docker inspect --format='{{json .State.Health.Status}}' mariadb 2>/dev/null || echo '"starting"')"
-        redis_status="$(docker inspect --format='{{json .State.Health.Status}}' redis 2>/dev/null || echo '"starting"')"
-        pma_status="$(docker inspect --format='{{json .State.Health.Status}}' phpmyadmin 2>/dev/null || echo '"starting"')"
+        maria_status="$(docker inspect --format='{{json .State.Health.Status}}' shared-mariadb 2>/dev/null || docker inspect --format='{{json .State.Health.Status}}' mariadb 2>/dev/null || echo '"starting"')"
+        redis_status="$(docker inspect --format='{{json .State.Health.Status}}' shared-redis 2>/dev/null || docker inspect --format='{{json .State.Health.Status}}' redis 2>/dev/null || echo '"starting"')"
 
-        if [[ "$maria_status" == '"healthy"' && "$redis_status" == '"healthy"' && "$pma_status" == '"healthy"' ]]; then
-            healthy=true
-            break
+        if [[ "$enable_pma" == "true" ]]; then
+            pma_status="$(docker inspect --format='{{json .State.Health.Status}}' shared-phpmyadmin 2>/dev/null || docker inspect --format='{{json .State.Health.Status}}' phpmyadmin 2>/dev/null || echo '"starting"')"
+            if [[ "$maria_status" == '"healthy"' && "$redis_status" == '"healthy"' && "$pma_status" == '"healthy"' ]]; then
+                healthy=true
+                break
+            fi
+        else
+            if [[ "$maria_status" == '"healthy"' && "$redis_status" == '"healthy"' ]]; then
+                healthy=true
+                break
+            fi
         fi
 
         sleep 2
@@ -214,31 +261,55 @@ start_services() {
     done
     echo
 
-    local net="${OPENSHIP_NETWORK:-openship}"
+    local net
+    net="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'shared-backend')"
+    [[ -z "$net" ]] && net="shared-backend"
+
     if [[ "$healthy" == "true" ]]; then
-        success "MariaDB, Redis and phpMyAdmin are healthy and running on '${net}'!"
+        if [[ "$enable_pma" == "true" ]]; then
+            success "MariaDB, Redis and phpMyAdmin are healthy and running on '${net}'!"
+        else
+            success "MariaDB and Redis are healthy and running on '${net}'!"
+        fi
     else
         warn "Containers started. Checking final statuses:"
-        warn "MariaDB:    $(docker inspect --format='{{json .State.Health.Status}}' mariadb 2>/dev/null || echo 'not found')"
-        warn "Redis:      $(docker inspect --format='{{json .State.Health.Status}}' redis 2>/dev/null || echo 'not found')"
-        warn "phpMyAdmin: $(docker inspect --format='{{json .State.Health.Status}}' phpmyadmin 2>/dev/null || echo 'not found')"
+        warn "MariaDB:    $(docker inspect --format='{{json .State.Health.Status}}' shared-mariadb 2>/dev/null || docker inspect --format='{{json .State.Health.Status}}' mariadb 2>/dev/null || echo 'not found')"
+        warn "Redis:      $(docker inspect --format='{{json .State.Health.Status}}' shared-redis 2>/dev/null || docker inspect --format='{{json .State.Health.Status}}' redis 2>/dev/null || echo 'not found')"
+        if [[ "$enable_pma" == "true" ]]; then
+            warn "phpMyAdmin: $(docker inspect --format='{{json .State.Health.Status}}' shared-phpmyadmin 2>/dev/null || docker inspect --format='{{json .State.Health.Status}}' phpmyadmin 2>/dev/null || echo 'not found')"
+        fi
     fi
 }
 
 stop_services() {
     section "Stopping services"
+    local enable_pma
+    enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'false')"
+    if [[ "$enable_pma" == "true" ]]; then
+        export COMPOSE_PROFILES="pma"
+    fi
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down
     success "Services stopped. (Data volumes preserved)"
 }
 
 restart_services() {
     section "Restarting services"
+    local enable_pma
+    enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'false')"
+    if [[ "$enable_pma" == "true" ]]; then
+        export COMPOSE_PROFILES="pma"
+    fi
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" restart
     success "Services restarted."
 }
 
 pull_images() {
     section "Pulling updated images"
+    local enable_pma
+    enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'false')"
+    if [[ "$enable_pma" == "true" ]]; then
+        export COMPOSE_PROFILES="pma"
+    fi
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
     success "Services updated."
@@ -248,13 +319,14 @@ show_status() {
     section "Shared Services Status"
 
     echo -e "${BOLD}Containers:${NC}"
-    docker ps -a --filter "name=mariadb" --filter "name=redis" --filter "name=phpmyadmin" --format "table {{.Names}}	{{.Status}}	{{.Ports}}	{{.Networks}}"
+    docker ps -a --filter "name=mariadb" --filter "name=redis" --filter "name=phpmyadmin" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Networks}}"
 
-    local net="${OPENSHIP_NETWORK:-openship}"
+    local net
+    net="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'shared-backend')"
+    [[ -z "$net" ]] && net="shared-backend"
     echo
     echo -e "${BOLD}Network (${net}):${NC}"
-    docker network inspect "$net" --format '{{range .Containers}}{{.Name}} ({{.IPv4Address}}){{"
-"}}{{end}}' 2>/dev/null || echo "Network not found."
+    docker network inspect "$net" --format '{{range .Containers}}{{.Name}} ({{.IPv4Address}}){{"\n"}}{{end}}' 2>/dev/null || echo "Network not found."
 
     echo
     echo -e "${BOLD}Volumes:${NC}"
@@ -262,15 +334,20 @@ show_status() {
 }
 
 follow_logs() {
+    local enable_pma
+    enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'false')"
+    if [[ "$enable_pma" == "true" ]]; then
+        export COMPOSE_PROFILES="pma"
+    fi
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs -f
 }
 
 print_summary() {
-    local pma_port net_name
-    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo '20003')"
-    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'' 
-' || echo 'openship')"
+    local pma_port pma_ip net_name enable_pma
+    pma_port="$(grep -E '^PHPMYADMIN_PORT=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '20003')"
+    pma_ip="$(grep -E '^PHPMYADMIN_BIND_IP=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo '127.0.0.1')"
+    net_name="$(grep -E '^OPENSHIP_NETWORK=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'shared-backend')"
+    enable_pma="$(grep -E '^ENABLE_PHPMYADMIN=' "$ENV_FILE" 2>/dev/null | cut -d '=' -f2- | tr -d '"'\'' \r\n' || echo 'false')"
 
     section "Ready! Connection Details"
 
@@ -278,14 +355,22 @@ print_summary() {
     echo "------------------------------------------------------------"
     echo "MariaDB Host:          mariadb:3306"
     echo "Redis Host:            redis:6379"
-    echo "phpMyAdmin Local Port: 127.0.0.1:${pma_port} (proxied to your PMA domain)"
+    if [[ "$enable_pma" == "true" ]]; then
+        echo "phpMyAdmin Local:      http://${pma_ip}:${pma_port} (proxied to your PMA domain)"
+    else
+        echo "phpMyAdmin:            Disabled (deploy with --with-pma to enable)"
+    fi
     echo "Credentials saved in:  ${ENV_FILE}"
     echo "------------------------------------------------------------"
     echo
     echo -e "${BOLD}2. Project Database Provisioning:${NC}"
     echo "------------------------------------------------------------"
     echo "Projects auto-provision their DB & user during deployment"
-    echo "using DB_ROOT_PASSWORD or manage tables via phpMyAdmin."
+    if [[ "$enable_pma" == "true" ]]; then
+        echo "using DB_ROOT_PASSWORD or manage tables via phpMyAdmin."
+    else
+        echo "using DB_ROOT_PASSWORD."
+    fi
     echo "------------------------------------------------------------"
 }
 
@@ -296,53 +381,92 @@ OpenShip Shared Services Deployer (MariaDB + Redis + phpMyAdmin)
 Usage:
   sudo ./deploy.sh [OPTIONS]
 
-Options:
-  --status        Display current status and health of containers
-  --restart       Restart MariaDB, Redis, and phpMyAdmin containers
-  --stop          Stop containers (volumes preserved)
-  --logs          Follow container logs in real time
-  --pull          Pull updated Docker images and recreate containers
-  --help, -h      Display this help message
+Deployment options:
+  --with-pma, --enable-pma      Deploy phpMyAdmin for database management
+  --without-pma, --disable-pma  Deploy without phpMyAdmin
+
+Management options:
+  --status                      Display current status and health of containers
+  --restart                     Restart containers
+  --stop                        Stop containers (volumes preserved)
+  --logs                        Follow container logs in real time
+  --pull                        Pull updated Docker images and recreate containers
+  --help, -h                    Display this help message
+
+Environment variables:
+  ENABLE_PHPMYADMIN=true|false  Toggle phpMyAdmin installation
 EOF
 }
 
 main() {
-    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-        show_help
-        exit 0
-    fi
+    local cli_action=""
+    local cli_pma=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --with-pma|--enable-pma)
+                cli_pma="true"
+                shift
+                ;;
+            --without-pma|--disable-pma)
+                cli_pma="false"
+                shift
+                ;;
+            --status)
+                cli_action="status"
+                shift
+                ;;
+            --restart)
+                cli_action="restart"
+                shift
+                ;;
+            --stop)
+                cli_action="stop"
+                shift
+                ;;
+            --logs)
+                cli_action="logs"
+                shift
+                ;;
+            --pull)
+                cli_action="pull"
+                shift
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                error "Unknown argument: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
 
     require_root_or_docker
     ensure_docker_and_compose
 
-    case "${1:-}" in
-        --status)
+    case "$cli_action" in
+        status)
             show_status
             ;;
-        --restart)
+        restart)
             restart_services
             ;;
-        --stop)
+        stop)
             stop_services
             ;;
-        --logs)
+        logs)
             follow_logs
             ;;
-        --pull)
+        pull)
             pull_images
             ;;
-        --help|-h)
-            show_help
-            ;;
         "")
-            configure_environment
+            configure_environment "$cli_pma"
             start_services
             print_summary
-            ;;
-        *)
-            error "Unknown argument: $1"
-            show_help
-            exit 1
             ;;
     esac
 }

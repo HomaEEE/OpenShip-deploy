@@ -11,6 +11,10 @@
     "REDIS_PASSWORD": {
       "value": "redis_password",
       "secret": true
+    },
+    "ENABLE_PHPMYADMIN": {
+      "value": "false",
+      "secret": false
     }
   }
 }
